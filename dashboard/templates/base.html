@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}AI Job Agent{% endblock %}</title>
+  <meta name="description" content="AI-powered job hunting dashboard for UAE tech roles" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <!-- Ambient background blobs -->
+  <div class="bg-blob blob-1"></div>
+  <div class="bg-blob blob-2"></div>
+  <div class="bg-blob blob-3"></div>
+
+  <!-- Sidebar nav -->
+  <nav class="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-icon">🤖</span>
+      <span class="brand-name">JobAgent</span>
+    </div>
+    <ul class="nav-links">
+      <li><a href="{{ url_for('index') }}" class="nav-link {% if request.endpoint == 'index' %}active{% endif %}">
+        <span class="nav-icon">⚡</span> Dashboard
+      </a></li>
+      <li><a href="{{ url_for('jobs_page') }}" class="nav-link {% if request.endpoint == 'jobs_page' %}active{% endif %}">
+        <span class="nav-icon">💼</span> Jobs
+      </a></li>
+      <li><a href="{{ url_for('applications_page') }}" class="nav-link {% if request.endpoint == 'applications_page' %}active{% endif %}">
+        <span class="nav-icon">📋</span> Applications
+      </a></li>
+    </ul>
+    <div class="sidebar-actions">
+      <button class="btn-action" id="btn-fetch" onclick="triggerFetch()">
+        <span>🔄</span> Fetch Jobs
+      </button>
+      <button class="btn-action btn-ai" id="btn-score" onclick="triggerScore()">
+        <span>🧠</span> Run AI Score
+      </button>
+    </div>
+    <div class="sidebar-footer">
+      <span class="profile-dot"></span>
+      <span class="profile-name">Afnan Khan</span>
+    </div>
+  </nav>
+
+  <!-- Main content -->
+  <main class="main-content">
+    {% block content %}{% endblock %}
+  </main>
+
+  <!-- Toast notification -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

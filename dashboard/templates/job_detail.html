@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}{{ job.title }} — AI Job Agent{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('jobs_page') }}" class="back-link">← Back to Jobs</a>
+</div>
+
+<div class="detail-grid">
+  <!-- Left: Job info -->
+  <div class="detail-main">
+    <div class="detail-header glass">
+      <div class="detail-freshness {{ (job.freshness_label or 'OLD')|lower }}">
+        {{ job.freshness_label or 'OLD' }}
+      </div>
+      <h1 class="detail-title">{{ job.title }}</h1>
+      <div class="detail-meta">
+        <span>🏢 {{ job.company or 'Unknown company' }}</span>
+        <span>📍 {{ job.location or 'Unknown location' }}</span>
+        <span>🔗 via {{ job.found_on_sources | join(', ') }}</span>
+      </div>
+      <div class="detail-actions">
+        <a href="{{ job.url }}" target="_blank" class="btn-primary">Open on {{ job.found_on_sources[0] }} ↗</a>
+        <button class="btn-apply" onclick="applyJob({{ job.id }}, false)"
+          id="apply-btn-{{ job.id }}">
+          🚀 Auto-Apply (dry run)
+        </button>
+        <button class="btn-apply btn-apply-live" onclick="applyJob({{ job.id }}, true, false)"
+          title="Fills AND submits the form for real">
+          ⚡ Apply for Real
+        </button>
+      </div>
+    </div>
+
+    <!-- Description -->
+    <div class="detail-section glass">
+      <h2 class="section-h2">📄 Job Description</h2>
+      {% if job.description %}
+      <div class="description-body">{{ job.description | nl2br }}</div>
+      {% else %}
+      <div class="no-desc-notice">
+        <p>No description fetched yet. Run <code>python main.py --no-ai</code> to hydrate descriptions.</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Right: AI panel + application log -->
+  <div class="detail-sidebar">
+    <!-- AI Score -->
+    <div class="ai-panel glass">
+      <h2 class="panel-title">🧠 AI Analysis</h2>
+      {% if job.ai_match_score is not none %}
+      {% set rec = job.ai_recommendation %}
+      <div class="score-big {{ rec|lower if rec else '' }}">
+        <div class="score-num">{{ job.ai_match_score }}%</div>
+        <div class="score-rec {{ rec|lower if rec else '' }}">{{ rec or '' }}</div>
+      </div>
+      {% else %}
+      <div class="score-big unscored">
+        <div class="score-num">?%</div>
+        <div class="score-rec">Not scored yet</div>
+      </div>
+      <p class="score-hint">Run <code>python main.py --score-only</code> or click "Run AI Score" in the sidebar to score this job.</p>
+      {% endif %}
+    </div>
+
+    <!-- Cover Letter -->
+    {% if job.ai_cover_letter %}
+    <div class="cover-panel glass">
+      <h2 class="panel-title">✉️ AI Cover Letter</h2>
+      <div class="cover-body">{{ job.ai_cover_letter | nl2br }}</div>
+      <button class="btn-copy" onclick="copyText(this, `{{ job.ai_cover_letter | replace('`','\\`') }}`)" >
+        📋 Copy
+      </button>
+    </div>
+    {% endif %}
+
+    <!-- Application history -->
+    {% if applications %}
+    <div class="apps-panel glass">
+      <h2 class="panel-title">📋 Applications</h2>
+      {% for a in applications %}
+      <div class="app-row status-{{ a.status|lower }}">
+        <span class="app-status">{{ a.status }}</span>
+        <span class="app-time">{{ a.applied_at or '—' }}</span>
+        {% if a.error_reason %}
+        <div class="app-error">{{ a.error_reason }}</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function applyJob(jobId, dryRun, headful=false) {
+  const btn = document.getElementById('apply-btn-' + jobId);
+  if (btn) { btn.textContent = '⏳ Applying…'; btn.disabled = true; }
+
+  fetch('/api/apply/' + jobId, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({dry_run: dryRun, headful: headful})
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (btn) { btn.disabled = false; btn.textContent = '🚀 Auto-Apply (dry run)'; }
+    if (d.error) {
+      showToast('❌ ' + d.error, 'error');
+    } else {
+      showToast('✅ ' + d.status + (d.error ? ': ' + d.error : ''), 'success');
+      setTimeout(() => location.reload(), 2000);
+    }
+  })
+  .catch(err => {
+    if (btn) { btn.disabled = false; }
+    showToast('❌ Network error: ' + err, 'error');
+  });
+}
+
+function copyText(btn, text) {
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = '✅ Copied!';
+    setTimeout(() => { btn.textContent = '📋 Copy'; }, 2000);
+  });
+}
+</script>
+{% endblock %}

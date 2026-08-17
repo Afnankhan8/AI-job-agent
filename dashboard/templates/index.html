@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — AI Job Agent{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Dashboard</h1>
+    <p class="page-sub">Your AI-powered job hunt at a glance</p>
+  </div>
+  <div class="header-time" id="live-time"></div>
+</div>
+
+<!-- Stat cards -->
+<div class="stats-grid" id="stats-grid">
+  <div class="stat-card glass loading">
+    <div class="stat-icon">💼</div>
+    <div class="stat-value" id="s-total">—</div>
+    <div class="stat-label">Total Active Jobs</div>
+  </div>
+  <div class="stat-card glass loading">
+    <div class="stat-icon">🔥</div>
+    <div class="stat-value" id="s-today">—</div>
+    <div class="stat-label">New Today</div>
+  </div>
+  <div class="stat-card glass loading">
+    <div class="stat-icon">🧠</div>
+    <div class="stat-value" id="s-scored">—</div>
+    <div class="stat-label">AI Scored</div>
+  </div>
+  <div class="stat-card glass loading">
+    <div class="stat-icon">🟢</div>
+    <div class="stat-value" id="s-strong">—</div>
+    <div class="stat-label">Strong Matches</div>
+  </div>
+  <div class="stat-card glass loading">
+    <div class="stat-icon">✅</div>
+    <div class="stat-value" id="s-applied">—</div>
+    <div class="stat-label">Applied</div>
+  </div>
+  <div class="stat-card glass loading">
+    <div class="stat-icon">⏳</div>
+    <div class="stat-value" id="s-pending">—</div>
+    <div class="stat-label">Pending</div>
+  </div>
+</div>
+
+<!-- Quick actions -->
+<div class="section-header">
+  <h2 class="section-title">Quick Actions</h2>
+</div>
+<div class="quick-actions">
+  <a href="{{ url_for('jobs_page') }}" class="action-card glass">
+    <div class="action-icon">💼</div>
+    <div class="action-text">
+      <strong>Browse Jobs</strong>
+      <span>Filter, sort and review all listings</span>
+    </div>
+    <span class="action-arrow">→</span>
+  </a>
+  <a href="{{ url_for('jobs_page') }}?sort=score&min_score=80" class="action-card glass">
+    <div class="action-icon">🎯</div>
+    <div class="action-text">
+      <strong>Top Matches</strong>
+      <span>AI-scored 80%+ strong matches</span>
+    </div>
+    <span class="action-arrow">→</span>
+  </a>
+  <a href="{{ url_for('jobs_page') }}?freshness=TODAY" class="action-card glass">
+    <div class="action-icon">🔥</div>
+    <div class="action-text">
+      <strong>Today's Jobs</strong>
+      <span>Posted today — apply fast</span>
+    </div>
+    <span class="action-arrow">→</span>
+  </a>
+  <a href="{{ url_for('applications_page') }}" class="action-card glass">
+    <div class="action-icon">📋</div>
+    <div class="action-text">
+      <strong>Application Log</strong>
+      <span>Track all submissions</span>
+    </div>
+    <span class="action-arrow">→</span>
+  </a>
+</div>
+
+<!-- Pipeline steps -->
+<div class="section-header" style="margin-top:2rem">
+  <h2 class="section-title">Pipeline</h2>
+  <p class="section-sub">Run each step from the sidebar buttons or CLI</p>
+</div>
+<div class="pipeline">
+  <div class="pipe-step glass">
+    <div class="pipe-num">1</div>
+    <div class="pipe-info">
+      <strong>Fetch Jobs</strong>
+      <span>Scrapes LinkedIn, Adzuna, Jooble for new listings</span>
+    </div>
+    <code>python main.py</code>
+  </div>
+  <div class="pipe-arrow">→</div>
+  <div class="pipe-step glass">
+    <div class="pipe-num">2</div>
+    <div class="pipe-info">
+      <strong>Fetch Descriptions</strong>
+      <span>Parallel scrape of each job page (auto-runs after fetch)</span>
+    </div>
+    <code>automatic</code>
+  </div>
+  <div class="pipe-arrow">→</div>
+  <div class="pipe-step glass">
+    <div class="pipe-num">3</div>
+    <div class="pipe-info">
+      <strong>AI Scoring</strong>
+      <span>Ollama matches jobs to your profile (requires local Ollama)</span>
+    </div>
+    <code>python main.py --score-only</code>
+  </div>
+  <div class="pipe-arrow">→</div>
+  <div class="pipe-step glass">
+    <div class="pipe-num">4</div>
+    <div class="pipe-info">
+      <strong>Auto-Apply</strong>
+      <span>Playwright fills & submits forms with AI cover letter</span>
+    </div>
+    <code>python main.py --auto-apply</code>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Live clock
+  function updateTime() {
+    const now = new Date();
+    document.getElementById('live-time').textContent =
+      now.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+  }
+  updateTime();
+  setInterval(updateTime, 1000);
+
+  // Load stats
+  fetch('/api/stats')
+    .then(r => r.json())
+    .then(d => {
+      document.getElementById('s-total').textContent = d.total;
+      document.getElementById('s-today').textContent = d.today;
+      document.getElementById('s-scored').textContent = d.scored;
+      document.getElementById('s-strong').textContent = d.strong;
+      document.getElementById('s-applied').textContent = d.applied;
+      document.getElementById('s-pending').textContent = d.pending;
+      document.querySelectorAll('.stat-card').forEach(c => c.classList.remove('loading'));
+    });
+</script>
+{% endblock %}

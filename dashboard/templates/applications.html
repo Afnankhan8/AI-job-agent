@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Applications — AI Job Agent{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Applications</h1>
+    <p class="page-sub">Your full application history</p>
+  </div>
+</div>
+
+<!-- Summary badges -->
+<div class="app-summary">
+  {% for status, count in summary.items() %}
+  <div class="app-badge status-{{ status|lower }}">
+    <span class="badge-count">{{ count }}</span>
+    <span class="badge-label">{{ status }}</span>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- Table -->
+{% if apps %}
+<div class="apps-table-wrap glass">
+  <table class="apps-table">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Job</th>
+        <th>Company</th>
+        <th>Status</th>
+        <th>AI Score</th>
+        <th>Applied At</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in apps %}
+      <tr class="status-row-{{ a.status|lower }}">
+        <td class="td-id">{{ a.id }}</td>
+        <td class="td-title">
+          <a href="{{ url_for('job_detail', job_id=a.job_id) }}">{{ a.title }}</a>
+        </td>
+        <td>{{ a.company or '—' }}</td>
+        <td>
+          <span class="status-badge status-{{ a.status|lower }}">{{ a.status }}</span>
+        </td>
+        <td>
+          {% if a.ai_match_score %}
+          <span class="inline-score">{{ a.ai_match_score }}%</span>
+          {% else %}—{% endif %}
+        </td>
+        <td class="td-time">{{ a.applied_at or '—' }}</td>
+        <td class="td-notes">{{ a.error_reason or '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty-state glass">
+  <div class="empty-icon">📋</div>
+  <h3>No applications yet</h3>
+  <p>Use the Apply button on any job, or run <code>python main.py --auto-apply</code>.</p>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Jobs — AI Job Agent{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Jobs</h1>
+    <p class="page-sub">{{ total }} listing{{ 's' if total != 1 else '' }} found</p>
+  </div>
+</div>
+
+<!-- Filters -->
+<form class="filters glass" method="GET" action="{{ url_for('jobs_page') }}">
+  <input class="filter-input" type="text" name="q" placeholder="Search title or company…" value="{{ q }}">
+
+  <select class="filter-select" name="freshness">
+    <option value="">All freshness</option>
+    {% for f in ['TODAY','NEW','RECENT','OLD'] %}
+    <option value="{{ f }}" {% if freshness == f %}selected{% endif %}>{{ f }}</option>
+    {% endfor %}
+  </select>
+
+  <select class="filter-select" name="source">
+    <option value="">All sources</option>
+    {% for s in ['linkedin','adzuna','jooble'] %}
+    <option value="{{ s }}" {% if source == s %}selected{% endif %}>{{ s }}</option>
+    {% endfor %}
+  </select>
+
+  <select class="filter-select" name="min_score">
+    <option value="">Any AI score</option>
+    <option value="80" {% if min_score == '80' %}selected{% endif %}>80%+ Strong</option>
+    <option value="60" {% if min_score == '60' %}selected{% endif %}>60%+ Good</option>
+    <option value="40" {% if min_score == '40' %}selected{% endif %}>40%+ Weak</option>
+  </select>
+
+  <select class="filter-select" name="sort">
+    <option value="recent" {% if sort == 'recent' %}selected{% endif %}>Most Recent</option>
+    <option value="score"  {% if sort == 'score'  %}selected{% endif %}>Highest Score</option>
+    <option value="company" {% if sort == 'company' %}selected{% endif %}>Company A–Z</option>
+  </select>
+
+  <button class="btn-filter" type="submit">Filter</button>
+  <a class="btn-clear" href="{{ url_for('jobs_page') }}">Clear</a>
+</form>
+
+<!-- Jobs table -->
+<div class="jobs-list">
+  {% for job in jobs %}
+  {% set score = job.ai_match_score %}
+  {% set rec = job.ai_recommendation %}
+  <a href="{{ url_for('job_detail', job_id=job.id) }}" class="job-card glass">
+    <div class="job-card-left">
+      <div class="job-freshness {{ (job.freshness_label or 'OLD')|lower }}">
+        {{ job.freshness_label or 'OLD' }}
+      </div>
+      <div class="job-info">
+        <div class="job-title">{{ job.title }}</div>
+        <div class="job-meta">
+          <span class="job-company">{{ job.company or 'Unknown' }}</span>
+          <span class="divider">·</span>
+          <span class="job-location">{{ job.location or 'Unknown' }}</span>
+          <span class="divider">·</span>
+          <span class="job-source">via {{ job.found_on_sources | join(', ') }}</span>
+        </div>
+        {% if job.description %}
+        <div class="job-excerpt">{{ job.description[:180] }}…</div>
+        {% else %}
+        <div class="job-excerpt no-desc">No description fetched yet</div>
+        {% endif %}
+      </div>
+    </div>
+    <div class="job-card-right">
+      {% if score is not none %}
+      <div class="score-ring {{ rec|lower if rec else 'unscored' }}">
+        <svg viewBox="0 0 36 36">
+          <path class="ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+          <path class="ring-fill" stroke-dasharray="{{ score }}, 100"
+            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+        </svg>
+        <span class="score-pct">{{ score }}%</span>
+      </div>
+      <div class="score-label {{ rec|lower if rec else '' }}">{{ rec or '' }}</div>
+      {% else %}
+      <div class="score-ring unscored">
+        <svg viewBox="0 0 36 36">
+          <path class="ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+          <path class="ring-fill" stroke-dasharray="0, 100"
+            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+        </svg>
+        <span class="score-pct">?</span>
+      </div>
+      <div class="score-label">Not scored</div>
+      {% endif %}
+    </div>
+  </a>
+  {% else %}
+  <div class="empty-state glass">
+    <div class="empty-icon">🔍</div>
+    <h3>No jobs found</h3>
+    <p>Try adjusting your filters or run <code>python main.py</code> to fetch new jobs.</p>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

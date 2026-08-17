@@ -1,0 +1,30 @@
+{
+  "personal": {
+    "first_name": "AI",
+    "last_name": "Engineer",
+    "full_name": "AI Engineer Candidate",
+    "email": "candidate@example.com",
+    "phone": "+971501234567",
+    "location": "Dubai, UAE",
+    "linkedin_url": "https://www.linkedin.com/in/ai-engineer",
+    "github_url": "https://github.com/ai-engineer",
+    "portfolio_url": "https://ai-engineer.dev",
+    "resume_path": "resume.pdf"
+  },
+  "work_preferences": {
+    "desired_title": "AI Engineer / Software Engineer",
+    "expected_salary": "25000 AED/month",
+    "notice_period": "30 days",
+    "work_authorization_uae": true,
+    "requires_sponsorship": false,
+    "years_of_experience": 5
+  },
+  "cover_letter_template": "Dear Hiring Manager,\n\nI am writing to express my strong interest in the open position. With hands-on expertise in AI/ML solutions, software engineering, and system design, I am confident in delivering value to your organization.\n\nBest regards,\nAI Engineer Candidate",
+  "screening_answers": {
+    "legally_authorized": "Yes",
+    "require_sponsorship": "No",
+    "notice_period": "30 days",
+    "current_location": "United Arab Emirates",
+    "willing_to_relocate": "Yes"
+  }
+}
