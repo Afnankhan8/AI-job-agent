@@ -5,5 +5,7 @@ __pycache__/
 *.pyc
 browser_profile/
 screenshots/
+applications/screenshots/
 config/user_profile.json
+
 
