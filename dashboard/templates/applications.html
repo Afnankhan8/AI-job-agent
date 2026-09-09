@@ -4,19 +4,38 @@
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">Applications</h1>
-    <p class="page-sub">Your full application history</p>
+    <h1 class="page-title">Application Log &amp; Diagnostics</h1>
+    <p class="page-sub">Inspect step-by-step Playwright execution logs &amp; captured screenshots</p>
+  </div>
+  <div class="header-right">
+    <button class="btn-action btn-login" id="btn-login" onclick="triggerLogin()">
+      <span>🔑</span> Session Login
+    </button>
   </div>
 </div>
 
 <!-- Summary badges -->
 <div class="app-summary">
   {% for status, count in summary.items() %}
-  <div class="app-badge status-{{ status|lower }}">
-    <span class="badge-count">{{ count }}</span>
+  <div class="app-badge">
+    <span class="badge-count" style="color:{% if status=='APPLIED' %}var(--green){% elif status=='DRY_RUN' %}var(--cyan){% elif status=='REQUIRES_MANUAL' %}var(--orange){% else %}var(--red){% endif %}">{{ count }}</span>
     <span class="badge-label">{{ status }}</span>
   </div>
   {% endfor %}
+</div>
+
+<!-- Helpful Diagnostic Callout -->
+<div class="glass" style="padding:1rem 1.25rem;margin-bottom:1.5rem;border-color:rgba(34,211,238,0.25);display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+  <div style="display:flex;align-items:center;gap:0.75rem">
+    <span style="font-size:24px">💡</span>
+    <div>
+      <div style="font-size:13px;font-weight:600;color:var(--text)">Why do some applications stop at REQUIRES_MANUAL?</div>
+      <div style="font-size:12px;color:var(--text-2)">LinkedIn &amp; Workday require an active logged-in session. Click <strong>Session Login</strong> above to open Chrome and log in once.</div>
+    </div>
+  </div>
+  <button class="btn-action btn-login" style="padding:0.4rem 0.85rem;font-size:12px" onclick="triggerLogin()">
+    🔑 Perform One-Time Login
+  </button>
 </div>
 
 <!-- Table -->
@@ -25,33 +44,39 @@
   <table class="apps-table">
     <thead>
       <tr>
-        <th>#</th>
-        <th>Job</th>
+        <th>ID</th>
+        <th>Job Title</th>
         <th>Company</th>
         <th>Status</th>
         <th>AI Score</th>
-        <th>Applied At</th>
-        <th>Notes</th>
+        <th>Reason / Diagnostic</th>
+        <th>Action</th>
       </tr>
     </thead>
     <tbody>
       {% for a in apps %}
-      <tr class="status-row-{{ a.status|lower }}">
-        <td class="td-id">{{ a.id }}</td>
+      <tr>
+        <td style="font-family:var(--font-mono);font-size:11px;color:var(--text-3)">#{{ a.id }}</td>
         <td class="td-title">
-          <a href="{{ url_for('job_detail', job_id=a.job_id) }}">{{ a.title }}</a>
+          <a href="{{ url_for('job_detail', job_id=a.job_id) }}" style="font-weight:600">{{ a.title }}</a>
         </td>
-        <td>{{ a.company or '—' }}</td>
+        <td style="color:var(--text-2)">{{ a.company or '—' }}</td>
         <td>
           <span class="status-badge status-{{ a.status|lower }}">{{ a.status }}</span>
         </td>
         <td>
           {% if a.ai_match_score %}
           <span class="inline-score">{{ a.ai_match_score }}%</span>
-          {% else %}—{% endif %}
+          {% else %}<span style="color:var(--text-3)">—</span>{% endif %}
         </td>
-        <td class="td-time">{{ a.applied_at or '—' }}</td>
-        <td class="td-notes">{{ a.error_reason or '' }}</td>
+        <td class="td-notes" style="font-size:12px;color:{% if a.status=='REQUIRES_MANUAL' %}var(--orange){% elif a.status=='FAILED' %}var(--red){% else %}var(--text-2){% endif %}">
+          {{ a.error_reason[:90] if a.error_reason else 'Fully executed' }}
+        </td>
+        <td>
+          <button class="btn-clear" style="font-size:11px;padding:3px 8px" onclick="inspectApp({{ a.id }})">
+            🔍 Inspect Logs
+          </button>
+        </td>
       </tr>
       {% endfor %}
     </tbody>
@@ -60,8 +85,8 @@
 {% else %}
 <div class="empty-state glass">
   <div class="empty-icon">📋</div>
-  <h3>No applications yet</h3>
-  <p>Use the Apply button on any job, or run <code>python main.py --auto-apply</code>.</p>
+  <h3>No application records yet</h3>
+  <p>Run <code>python main.py --auto-apply</code> or click "Auto-Apply" on any job detail page.</p>
 </div>
 {% endif %}
 {% endblock %}

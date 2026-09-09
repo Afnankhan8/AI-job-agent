@@ -45,14 +45,15 @@ def get_repo():
 def api_stats():
     conn, repo = get_repo()
     try:
-        all_jobs   = repo.list_active_jobs(limit=1000)
-        today      = sum(1 for j in all_jobs if j.freshness_label in ("TODAY", "NEW"))
-        scored     = sum(1 for j in all_jobs if j.ai_match_score is not None)
-        strong     = sum(1 for j in all_jobs if (j.ai_match_score or 0) >= 80)
-        good       = sum(1 for j in all_jobs if 60 <= (j.ai_match_score or 0) < 80)
+        all_jobs    = repo.list_active_jobs(limit=1000)
+        today       = sum(1 for j in all_jobs if j.freshness_label in ("TODAY", "NEW"))
+        scored      = sum(1 for j in all_jobs if j.ai_match_score is not None)
+        strong      = sum(1 for j in all_jobs if (j.ai_match_score or 0) >= 80)
+        good        = sum(1 for j in all_jobs if 60 <= (j.ai_match_score or 0) < 80)
         app_summary = repo.get_application_summary()
-        applied    = app_summary.get("APPLIED", 0)
-        pending    = app_summary.get("PENDING", 0)
+        applied     = app_summary.get("APPLIED", 0)
+        pending     = app_summary.get("PENDING", 0)
+        manual      = app_summary.get("REQUIRES_MANUAL", 0)
         return jsonify({
             "total":   len(all_jobs),
             "today":   today,
@@ -61,78 +62,194 @@ def api_stats():
             "good":    good,
             "applied": applied,
             "pending": pending,
+            "manual":  manual,
         })
     finally:
         conn.close()
 
 
+@app.route("/api/feed")
+def api_feed():
+    """Return latest 60 jobs as JSON — polled by the frontend every 30 s."""
+    conn, repo = get_repo()
+    try:
+        jobs = repo.list_active_jobs(limit=60)
+        result = []
+        for j in jobs:
+            result.append({
+                "id":             j.id,
+                "title":          j.title or "Untitled",
+                "company":        j.company or "Unknown",
+                "location":       j.location or "Remote",
+                "url":            j.url or "#",
+                "freshness":      j.freshness_label or "OLD",
+                "score":          j.ai_match_score,
+                "recommendation": j.ai_recommendation,
+                "sources":        j.found_on_sources,
+                "excerpt":        (j.description or "")[:140],
+                "last_seen":      j.last_seen_at,
+            })
+        return jsonify({
+            "jobs":      result,
+            "count":     len(result),
+            "timestamp": __import__("datetime").datetime.now().isoformat(),
+        })
+    finally:
+        conn.close()
+
+
+@app.route("/api/trending")
+def api_trending():
+    """Return trending companies, sources, freshness breakdown, score distribution."""
+    from collections import Counter
+    conn, repo = get_repo()
+    try:
+        jobs = repo.list_active_jobs(limit=1000)
+
+        companies = Counter(j.company for j in jobs if j.company)
+        sources   = Counter()
+        for j in jobs:
+            for s in (j.found_on_sources or []):
+                sources[s] += 1
+
+        fresh   = Counter(j.freshness_label or "OLD" for j in jobs)
+        strong  = sum(1 for j in jobs if (j.ai_match_score or 0) >= 80)
+        good    = sum(1 for j in jobs if 60 <= (j.ai_match_score or 0) < 80)
+        weak    = sum(1 for j in jobs if 1  <= (j.ai_match_score or 0) < 60)
+
+        hot_today = [
+            {"id": j.id, "title": j.title, "company": j.company,
+             "score": j.ai_match_score, "location": j.location}
+            for j in jobs if j.freshness_label in ("TODAY", "NEW")
+        ][:20]
+
+        top_scored = sorted(
+            [j for j in jobs if j.ai_match_score is not None],
+            key=lambda j: j.ai_match_score or 0, reverse=True
+        )[:10]
+        top_scored_data = [
+            {"id": j.id, "title": j.title, "company": j.company,
+             "score": j.ai_match_score, "recommendation": j.ai_recommendation}
+            for j in top_scored
+        ]
+
+        return jsonify({
+            "top_companies":  companies.most_common(8),
+            "sources":        dict(sources),
+            "freshness":      dict(fresh),
+            "score_dist":     {"strong": strong, "good": good, "weak": weak},
+            "hot_today":      hot_today,
+            "top_scored":     top_scored_data,
+        })
+    finally:
+        conn.close()
+
+
+
 @app.route("/api/apply/<int:job_id>", methods=["POST"])
 def api_apply(job_id):
-    """Trigger Playwright auto-apply for a single job (AJAX)."""
+    """Trigger V2 adapter auto-apply for a single job (AJAX)."""
     dry_run = request.json.get("dry_run", True)
-    headful = request.json.get("headful", False)
+    headful  = request.json.get("headful", False)
 
     conn, repo = get_repo()
-    jobs = [j for j in repo.list_active_jobs(limit=1000) if j.id == job_id]
+    all_jobs = repo.list_active_jobs(limit=1000)
+    jobs = [j for j in all_jobs if j.id == job_id]
     conn.close()
 
     if not jobs:
         return jsonify({"error": "Job not found"}), 404
 
     try:
-        from auto_apply import run_auto_apply
+        from config.profile_loader import CandidateProfile
+        from applier.adapters import detect_platform, get_adapter
+        from applier.url_resolver import resolve_url
+        from ai import get_ai_client
+        from playwright.sync_api import sync_playwright
         from database.models import get_connection as gc
         from database.repository import JobRepository as JR
 
-        # Run apply in background-compatible way
-        c2 = gc(SETTINGS.database_path)
-        r2 = JR(c2)
+        profile = CandidateProfile.load_from_file(SETTINGS.user_profile_path)
         job = jobs[0]
 
-        # Build a minimal profile
-        from config.profile_loader import CandidateProfile
-        profile = CandidateProfile.load_from_file(SETTINGS.user_profile_path)
+        # Build AI client (optional — falls back gracefully)
+        try:
+            ai_client = get_ai_client()
+            if not ai_client.health_check():
+                ai_client = None
+        except Exception:
+            ai_client = None
 
-        from playwright.sync_api import sync_playwright
-        from applier.browser_engine import ApplicationEngine
+        # AI cover letter
+        ai_cover_letter = job.ai_cover_letter or profile.cover_letter_template
 
-        with sync_playwright() as p:
-            ctx = p.chromium.launch_persistent_context(
-                user_data_dir=str(Path(__file__).parent.parent / "browser_profile"),
-                headless=not headful,
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
-                viewport={"width": 1280, "height": 900},
-                locale="en-US",
-            )
-            engine = ApplicationEngine(
-                profile=profile,
-                context=ctx,
-                dry_run=dry_run,
-                screenshots_dir=SETTINGS.screenshots_dir,
-            )
-            # Set AI cover letter if available
-            engine.ai_cover_letter = job.ai_cover_letter
+        c2 = gc(SETTINGS.database_path)
+        r2 = JR(c2)
+        app_id = r2.create_application(job.id, status="PENDING")
 
-            app_id = r2.create_application(job.id, status="PENDING")
-            outcome = engine.apply(job)
+        ctx = None
+        try:
+            with sync_playwright() as p:
+                ctx = p.chromium.launch_persistent_context(
+                    user_data_dir=str(Path(__file__).parent.parent / "browser_profile"),
+                    headless=not headful,
+                    args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
+                    viewport={"width": 1280, "height": 900},
+                    locale="en-US",
+                )
+
+                resolved_url, _ = resolve_url(job.url)
+                platform = detect_platform(resolved_url)
+                adapter  = get_adapter(platform)
+
+                outcome = adapter.apply(
+                    job=job,
+                    profile=profile,
+                    context=ctx,
+                    dry_run=dry_run,
+                    ai_cover_letter=ai_cover_letter,
+                    ai_answers={},
+                    screenshots_dir=SETTINGS.screenshots_dir,
+                    ai_client=ai_client,
+                )
+                try:
+                    ctx.close()
+                except Exception:
+                    pass
+        except Exception as pw_err:
+            err_msg = str(pw_err)
+            if "SingletonLock" in err_msg or "user data directory is already in use" in err_msg.lower():
+                err_msg = "Browser profile is locked by another running process. Please wait a moment and try again."
             r2.update_application(
                 app_id=app_id,
-                status=outcome.status,
-                redirect_url=outcome.redirect_url,
-                screenshot_path=outcome.screenshot_path,
-                error_reason=outcome.error_reason,
-                logs=outcome.logs,
+                status="FAILED",
+                redirect_url=job.url,
+                screenshot_path=None,
+                error_reason=err_msg,
+                logs=[f"Playwright launch error: {pw_err}"],
                 ai_match_score=job.ai_match_score,
-                ai_cover_letter=job.ai_cover_letter,
+                ai_cover_letter=ai_cover_letter,
             )
-            ctx.close()
+            c2.close()
+            return jsonify({"status": "FAILED", "error": err_msg})
 
+        r2.update_application(
+            app_id=app_id,
+            status=outcome.status,
+            redirect_url=outcome.redirect_url,
+            screenshot_path=outcome.screenshot_path,
+            error_reason=outcome.error_reason,
+            logs=outcome.logs,
+            ai_match_score=job.ai_match_score,
+            ai_cover_letter=ai_cover_letter,
+        )
         c2.close()
         return jsonify({"status": outcome.status, "error": outcome.error_reason})
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"status": "FAILED", "error": str(e)}), 500
+
 
 
 # ── Pages ─────────────────────────────────────────────────────────────────────
@@ -231,6 +348,72 @@ def applications_page():
         conn.close()
 
 
+@app.route("/profile", methods=["GET", "POST"])
+def profile_page():
+    profile_path = Path(SETTINGS.user_profile_path)
+    if request.method == "POST":
+        try:
+            data = request.json or {}
+            # Write back to JSON
+            with open(profile_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            return jsonify({"status": "success", "message": "Profile saved successfully!"})
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 500
+
+    # GET profile
+    profile_data = {}
+    if profile_path.exists():
+        with open(profile_path, encoding="utf-8") as f:
+            profile_data = json.load(f)
+    return render_template("profile.html", profile=profile_data)
+
+
+@app.route("/settings", methods=["GET", "POST"])
+def settings_page():
+    env_path = Path(__file__).parent.parent / ".env"
+    if request.method == "POST":
+        try:
+            data = request.json or {}
+            # Read existing .env lines
+            existing = {}
+            if env_path.exists():
+                with open(env_path, encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            k, v = line.split("=", 1)
+                            existing[k.strip()] = v.strip()
+
+            # Update with submitted fields
+            for key in ["AI_PROVIDER", "CLAUDE_API_KEY", "CLAUDE_MODEL",
+                        "DEFAULT_WHAT", "DEFAULT_WHERE", "JOOBLE_API_KEY",
+                        "AI_MATCH_THRESHOLD"]:
+                if key in data:
+                    existing[key] = str(data[key])
+
+            # Write back to .env
+            with open(env_path, "w", encoding="utf-8") as f:
+                for k, v in existing.items():
+                    f.write(f"{k}={v}\n")
+
+            return jsonify({"status": "success", "message": "Settings updated! (.env reloaded)"})
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 500
+
+    # GET settings
+    curr_settings = {
+        "ai_provider": SETTINGS.ai_provider,
+        "claude_api_key": SETTINGS.claude_api_key or "",
+        "claude_model": SETTINGS.claude_model,
+        "default_what": SETTINGS.default_what,
+        "default_where": SETTINGS.default_where,
+        "jooble_api_key": SETTINGS.jooble_api_key or "",
+        "ai_match_threshold": SETTINGS.ai_match_threshold,
+    }
+    return render_template("settings.html", settings=curr_settings)
+
+
 @app.route("/run/fetch", methods=["POST"])
 def run_fetch():
     """Trigger a fresh job ingestion + description fetch in the background."""
@@ -244,16 +427,17 @@ def run_fetch():
 
 @app.route("/run/score", methods=["POST"])
 def run_score():
-    """Trigger AI scoring in the background."""
+    """Trigger AI scoring in the background using the configured AI provider."""
     def _run():
+        from ai import get_ai_client
         from ai.scorer import score_unanalyzed_jobs
         from config.profile_loader import CandidateProfile
-        from ai.ollama_client import OllamaClient
         conn2, repo2 = get_repo()
         try:
             profile = CandidateProfile.load_from_file(SETTINGS.user_profile_path)
-            client = OllamaClient(base_url=SETTINGS.ollama_base_url, model=SETTINGS.ollama_model)
-            score_unanalyzed_jobs(repo2, profile, client, limit=200, verbose=False)
+            client = get_ai_client()
+            if client.health_check():
+                score_unanalyzed_jobs(repo2, profile, client, limit=200, verbose=False)
         except Exception:
             pass
         finally:
@@ -263,7 +447,66 @@ def run_score():
     return jsonify({"status": "started"})
 
 
+
+from flask import send_from_directory
+
+@app.route("/screenshots/<path:filename>")
+def serve_screenshot(filename):
+    """Serve application screenshots from the screenshots directory."""
+    screenshots_dir = Path(__file__).parent.parent / "applications" / "screenshots"
+    return send_from_directory(screenshots_dir, filename)
+
+
+@app.route("/api/applications/<int:app_id>")
+def api_application_detail(app_id):
+    """Return full application details including parsed logs for UI modal inspection."""
+    conn, repo = get_repo()
+    try:
+        row = conn.execute(
+            """
+            SELECT a.*, j.title, j.company, j.url AS job_url, j.location, j.ai_match_score
+            FROM applications a
+            JOIN jobs j ON j.id = a.job_id
+            WHERE a.id = ?
+            """,
+            (app_id,)
+        ).fetchone()
+
+        if not row:
+            return jsonify({"error": "Application not found"}), 404
+
+        d = dict(row)
+        # Parse JSON logs string into Python list
+        try:
+            d["logs_parsed"] = json.loads(d.get("logs") or "[]")
+        except Exception:
+            d["logs_parsed"] = [d.get("logs") or "No detailed logs recorded."]
+
+        # Standardize screenshot filename for web URL
+        if d.get("screenshot_path"):
+            sp = Path(d["screenshot_path"])
+            d["screenshot_url"] = f"/screenshots/{sp.name}"
+        else:
+            d["screenshot_url"] = None
+
+        return jsonify(d)
+    finally:
+        conn.close()
+
+
+@app.route("/run/login", methods=["POST"])
+def run_login():
+    """Launch interactive browser login session (headful) in background."""
+    def _run():
+        import subprocess
+        subprocess.run([sys.executable, "auto_apply.py", "--login-only"], cwd=str(Path(__file__).parent.parent))
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return jsonify({"status": "started", "message": "Opening visible browser for login..."})
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
+
 
 if __name__ == "__main__":
     import sys

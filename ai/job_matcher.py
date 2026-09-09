@@ -42,6 +42,10 @@ The JSON must have exactly these keys:
 - "recommendation": one of "STRONG_MATCH", "GOOD_MATCH", "WEAK_MATCH", or "SKIP"
 - "reasoning": a short paragraph explaining the match
 
+CRITICAL STRICT FILTERS (AUTO-REJECT if any are true):
+1. Experience limit: If the job requires MORE than 2 years of experience (e.g. 3+ years, 5 years, Senior role), score it 0 (SKIP).
+2. Location: If the job explicitly requires you to be ON-SITE in a country you don't live in (and doesn't allow remote/worldwide work), score it 0 (SKIP).
+
 Scoring guide:
 - 80-100 = STRONG_MATCH (great fit, should definitely apply)
 - 60-79  = GOOD_MATCH (decent fit, worth applying)

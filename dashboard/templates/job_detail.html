@@ -2,90 +2,117 @@
 {% block title %}{{ job.title }} — AI Job Agent{% endblock %}
 
 {% block content %}
-<div class="page-header">
-  <a href="{{ url_for('jobs_page') }}" class="back-link">← Back to Jobs</a>
+<div class="page-header" style="margin-bottom:1.5rem">
+  <div>
+    <a href="{{ url_for('jobs_page') }}" style="font-size:13px;color:var(--purple);font-weight:600">← Back to Jobs</a>
+    <h1 class="page-title" style="margin-top:0.5rem;font-size:24px">{{ job.title }}</h1>
+    <p class="page-sub">
+      <span>🏢 {{ job.company or 'Unknown company' }}</span> · 
+      <span>📍 {{ job.location or 'Unknown location' }}</span> · 
+      <span>🔗 via {{ job.found_on_sources | join(', ') }}</span>
+    </p>
+  </div>
+  <div class="header-right">
+    {% set fCls = {'TODAY':'today','NEW':'new','RECENT':'recent','OLD':'old'}.get(job.freshness_label or 'OLD','old') %}
+    {% set fEmoji = {'today':'🔥','new':'⚡','recent':'✨','old':''}.get(fCls,'') %}
+    <span class="fresh-pill fresh-{{ fCls }}">{{ fEmoji }} {{ job.freshness_label or 'OLD' }}</span>
+  </div>
 </div>
 
-<div class="detail-grid">
-  <!-- Left: Job info -->
-  <div class="detail-main">
-    <div class="detail-header glass">
-      <div class="detail-freshness {{ (job.freshness_label or 'OLD')|lower }}">
-        {{ job.freshness_label or 'OLD' }}
+<div class="job-detail-grid">
+  <!-- Left: Main description & details -->
+  <div class="glass job-detail-box">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;flex-wrap:wrap;gap:0.75rem">
+      <div style="display:flex;gap:0.5rem">
+        {% for s in job.found_on_sources %}
+        <span class="source-pill {{ s }}">{{ s }}</span>
+        {% endfor %}
       </div>
-      <h1 class="detail-title">{{ job.title }}</h1>
-      <div class="detail-meta">
-        <span>🏢 {{ job.company or 'Unknown company' }}</span>
-        <span>📍 {{ job.location or 'Unknown location' }}</span>
-        <span>🔗 via {{ job.found_on_sources | join(', ') }}</span>
-      </div>
-      <div class="detail-actions">
-        <a href="{{ job.url }}" target="_blank" class="btn-primary">Open on {{ job.found_on_sources[0] }} ↗</a>
-        <button class="btn-apply" onclick="applyJob({{ job.id }}, false)"
-          id="apply-btn-{{ job.id }}">
-          🚀 Auto-Apply (dry run)
+      <a href="{{ job.url }}" target="_blank" class="btn-clear" style="font-size:12px;display:inline-flex;align-items:center;gap:4px">
+        <span>Open original posting</span> ↗
+      </a>
+    </div>
+
+    <div class="detail-label">Job Description</div>
+    {% if job.description %}
+    <div class="desc-content">{{ job.description }}</div>
+    {% else %}
+    <div class="empty-state" style="padding:2rem 1rem">
+      <div class="empty-icon">📄</div>
+      <h3>No description fetched yet</h3>
+      <p>Run <code>python main.py</code> to hydrate full job descriptions.</p>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Right: Sidebar with AI & Apply actions -->
+  <div>
+    <!-- Apply Actions -->
+    <div class="side-panel" style="padding:1.25rem">
+      <div class="side-panel-head" style="padding:0 0 0.85rem;margin-bottom:1rem">⚡ Quick Apply</div>
+      <div style="display:flex;flex-direction:column;gap:0.75rem">
+        <button class="btn-apply" id="apply-btn-{{ job.id }}" onclick="applyJob({{ job.id }}, true, true)">
+          🚀 Auto-Apply (Dry Run)
         </button>
-        <button class="btn-apply btn-apply-live" onclick="applyJob({{ job.id }}, true, false)"
-          title="Fills AND submits the form for real">
+        <button class="btn-action btn-ai" style="justify-content:center;padding:0.75rem" onclick="applyJob({{ job.id }}, false, true)">
           ⚡ Apply for Real
         </button>
       </div>
     </div>
 
-    <!-- Description -->
-    <div class="detail-section glass">
-      <h2 class="section-h2">📄 Job Description</h2>
-      {% if job.description %}
-      <div class="description-body">{{ job.description | nl2br }}</div>
-      {% else %}
-      <div class="no-desc-notice">
-        <p>No description fetched yet. Run <code>python main.py --no-ai</code> to hydrate descriptions.</p>
-      </div>
-      {% endif %}
-    </div>
-  </div>
-
-  <!-- Right: AI panel + application log -->
-  <div class="detail-sidebar">
-    <!-- AI Score -->
-    <div class="ai-panel glass">
-      <h2 class="panel-title">🧠 AI Analysis</h2>
+    <!-- AI Match Score -->
+    <div class="side-panel" style="padding:1.25rem">
+      <div class="side-panel-head" style="padding:0 0 0.85rem;margin-bottom:1rem">🧠 AI Score</div>
       {% if job.ai_match_score is not none %}
-      {% set rec = job.ai_recommendation %}
-      <div class="score-big {{ rec|lower if rec else '' }}">
-        <div class="score-num">{{ job.ai_match_score }}%</div>
-        <div class="score-rec {{ rec|lower if rec else '' }}">{{ rec or '' }}</div>
+      {% set rec = (job.ai_recommendation or '').lower() %}
+      <div style="display:flex;align-items:center;gap:1rem">
+        <div class="score-ring {{ rec }}" style="width:64px;height:64px">
+          <svg viewBox="0 0 36 36" style="width:64px;height:64px">
+            <path class="ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+            <path class="ring-fill" stroke-dasharray="{{ job.ai_match_score }}, 100"
+              d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+          </svg>
+          <span class="score-pct" style="font-size:15px">{{ job.ai_match_score }}%</span>
+        </div>
+        <div>
+          <div class="score-label {{ rec }}" style="font-size:14px;text-align:left">{{ job.ai_recommendation or '' }}</div>
+          <div style="font-size:11px;color:var(--text-3);margin-top:2px">Scored by Claude AI</div>
+        </div>
       </div>
       {% else %}
-      <div class="score-big unscored">
-        <div class="score-num">?%</div>
-        <div class="score-rec">Not scored yet</div>
+      <div style="text-align:center;padding:0.5rem">
+        <div style="font-size:24px;margin-bottom:0.3rem">❓</div>
+        <div style="font-size:13px;color:var(--text-2)">Not scored yet</div>
+        <button class="btn-action btn-ai" style="margin-top:0.75rem;justify-content:center" onclick="triggerScore()">
+          <span>🧠</span> Score Now
+        </button>
       </div>
-      <p class="score-hint">Run <code>python main.py --score-only</code> or click "Run AI Score" in the sidebar to score this job.</p>
       {% endif %}
     </div>
 
-    <!-- Cover Letter -->
+    <!-- AI Cover Letter -->
     {% if job.ai_cover_letter %}
-    <div class="cover-panel glass">
-      <h2 class="panel-title">✉️ AI Cover Letter</h2>
-      <div class="cover-body">{{ job.ai_cover_letter | nl2br }}</div>
-      <button class="btn-copy" onclick="copyText(this, `{{ job.ai_cover_letter | replace('`','\\`') }}`)" >
-        📋 Copy
-      </button>
+    <div class="side-panel" style="padding:1.25rem">
+      <div class="side-panel-head" style="padding:0 0 0.85rem;margin-bottom:0.75rem;display:flex;justify-content:space-between">
+        <span>✉️ Tailored Cover Letter</span>
+        <button class="btn-clear" style="font-size:10px;padding:2px 6px" onclick="copyText(this, `{{ job.ai_cover_letter | replace('`','\\`') }}`)">📋 Copy</button>
+      </div>
+      <div style="font-size:12px;color:var(--text-2);line-height:1.6;white-space:pre-wrap;max-height:220px;overflow-y:auto">{{ job.ai_cover_letter }}</div>
     </div>
     {% endif %}
 
-    <!-- Application history -->
+    <!-- Applications History -->
     {% if applications %}
-    <div class="apps-panel glass">
-      <h2 class="panel-title">📋 Applications</h2>
+    <div class="side-panel" style="padding:1.25rem">
+      <div class="side-panel-head" style="padding:0 0 0.85rem;margin-bottom:0.75rem">📋 Application History</div>
       {% for a in applications %}
-      <div class="app-row status-{{ a.status|lower }}">
-        <span class="app-status">{{ a.status }}</span>
-        <span class="app-time">{{ a.applied_at or '—' }}</span>
+      <div style="padding:0.5rem 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span class="status-badge status-{{ a.status|lower }}">{{ a.status }}</span>
+          <span class="td-time">{{ a.applied_at or '—' }}</span>
+        </div>
         {% if a.error_reason %}
-        <div class="app-error">{{ a.error_reason }}</div>
+        <div style="font-size:11px;color:var(--orange);margin-top:4px">{{ a.error_reason }}</div>
         {% endif %}
       </div>
       {% endfor %}
@@ -97,9 +124,10 @@
 
 {% block scripts %}
 <script>
-function applyJob(jobId, dryRun, headful=false) {
+function applyJob(jobId, dryRun, headful=true) {
   const btn = document.getElementById('apply-btn-' + jobId);
   if (btn) { btn.textContent = '⏳ Applying…'; btn.disabled = true; }
+  showToast('Opening browser context & filling form…', 'info', '🤖');
 
   fetch('/api/apply/' + jobId, {
     method: 'POST',
@@ -108,17 +136,17 @@ function applyJob(jobId, dryRun, headful=false) {
   })
   .then(r => r.json())
   .then(d => {
-    if (btn) { btn.disabled = false; btn.textContent = '🚀 Auto-Apply (dry run)'; }
+    if (btn) { btn.disabled = false; btn.textContent = '🚀 Auto-Apply (Dry Run)'; }
     if (d.error) {
-      showToast('❌ ' + d.error, 'error');
+      showToast('⚠️ ' + d.error, 'error');
     } else {
-      showToast('✅ ' + d.status + (d.error ? ': ' + d.error : ''), 'success');
+      showToast('✅ Outcome: ' + d.status, 'success');
       setTimeout(() => location.reload(), 2000);
     }
   })
   .catch(err => {
-    if (btn) { btn.disabled = false; }
-    showToast('❌ Network error: ' + err, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = '🚀 Auto-Apply (Dry Run)'; }
+    showToast('❌ Error: ' + err, 'error');
   });
 }
 

@@ -39,6 +39,7 @@ class WorkdayAdapter(BaseAdapter):
         ai_answers: Optional[dict] = None,
         screenshots_dir: str = "applications/screenshots",
         ai_client=None,
+        **kwargs,
     ) -> AdapterOutcome:
         logs = [f"[workday] Applying to: {job.title} @ {job.company}"]
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -92,25 +93,39 @@ class WorkdayAdapter(BaseAdapter):
                 return outcome
 
             # ── Handle guest apply or account creation ─────────────────────────
-            # Some Workday portals offer "Apply Without Account"
-            for guest_sel in [
+            # Workday portals vary widely — try every known "Apply Without Account" selector
+            guest_selectors = [
                 "button:has-text('Apply Without an Account')",
+                "button:has-text('Apply without an account')",
                 "button:has-text('Apply as Guest')",
+                "button:has-text('Apply as a Guest')",
                 "a:has-text('Apply Without')",
-            ]:
+                "a:has-text('Apply without')",
+                "button:has-text('Continue as Guest')",
+                "button:has-text('Guest')",
+                "[data-automation-id='continueWithoutAccount']",
+                "[data-automation-id='guestSignIn']",
+                "button:has-text('Continue without creating')",
+                "a:has-text('Continue without')",
+                "button:has-text('Skip sign in')",
+                "button:has-text('Skip Sign In')",
+            ]
+            guest_clicked = False
+            for guest_sel in guest_selectors:
                 try:
                     btn = page.locator(guest_sel).first
-                    if btn.is_visible(timeout=2000):
+                    if btn.is_visible(timeout=1500):
                         btn.click()
                         page.wait_for_timeout(2000)
-                        logs.append("Selected guest/without-account apply.")
+                        logs.append(f"Guest apply selected: {guest_sel}")
+                        guest_clicked = True
                         break
                 except Exception:
                     pass
 
-            # Check if it wants account sign-in
+            # Check if it wants account sign-in (and guest apply wasn't available)
             needs_login = False
-            for sel in ["input[data-automation-id='email'], input[type='email']"]:
+            for sel in ["input[data-automation-id='email']", "input[type='email']"]:
                 try:
                     if page.locator(sel).first.is_visible(timeout=2000):
                         needs_login = True
@@ -132,13 +147,16 @@ class WorkdayAdapter(BaseAdapter):
                     else:
                         logs.append("No Workday password set — marking REQUIRES_MANUAL.")
                         outcome.error_reason = (
-                            "Workday needs an account. Set workday_password in profile. "
-                            f"Apply manually: {page.url}"
+                            "⚠️  Workday account required but workday_password is empty in "
+                            "config/user_profile.json. "
+                            "Add your Workday password there and retry. "
+                            f"Or apply manually at: {page.url}"
                         )
                         self._screenshot(page, screenshot_path)
                         return outcome
                 except Exception as e:
                     logs.append(f"Workday sign-in error: {e}")
+
 
             # ── Fill form in all frames ─────────────────────────────────────────
             page.wait_for_timeout(3000)

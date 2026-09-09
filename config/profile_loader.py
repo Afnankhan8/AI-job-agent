@@ -21,12 +21,14 @@ class PersonalInfo:
     location: str
     linkedin_url: str
     linkedin_email: str
-    linkedin_password: str
-    workday_email: str
-    workday_password: str
-    github_url: str
-    portfolio_url: str
-    resume_path: str          # absolute or relative path to the resume PDF
+    linkedin_password: str = ""
+    workday_email: str = ""
+    workday_password: str = ""
+    indeed_email: str = ""
+    indeed_password: str = ""
+    github_url: str = ""
+    portfolio_url: str = ""
+    resume_path: str = ""          # absolute or relative path to the resume PDF
 
 
 @dataclass

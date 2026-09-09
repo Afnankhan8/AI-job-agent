@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}System Settings — AI Job Agent{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">System Settings &amp; API Keys</h1>
+    <p class="page-sub">Configure Claude AI, search keywords, target country, and API credentials</p>
+  </div>
+  <div class="header-right">
+    <button class="btn-filter" id="save-env-btn" onclick="saveSettings()">⚙️ Save Settings</button>
+  </div>
+</div>
+
+<div class="two-col" style="grid-template-columns: 1fr 340px">
+  <div style="display:flex;flex-direction:column;gap:1.25rem">
+    
+    <!-- AI Provider Configuration -->
+    <div class="glass" style="padding:1.5rem">
+      <h2 class="section-title" style="margin-bottom:1rem">🤖 AI Engine Configuration</h2>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+        <div>
+          <label class="detail-label">AI Provider</label>
+          <select class="filter-select" style="width:100%" id="set_provider">
+            <option value="claude" {% if settings.ai_provider == 'claude' %}selected{% endif %}>Claude (Anthropic API)</option>
+            <option value="ollama" {% if settings.ai_provider == 'ollama' %}selected{% endif %}>Ollama (Local Server)</option>
+          </select>
+        </div>
+        <div>
+          <label class="detail-label">Claude Model</label>
+          <input class="filter-input" style="width:100%" id="set_claude_model" value="{{ settings.claude_model }}">
+        </div>
+        <div style="grid-column: span 2">
+          <label class="detail-label">Claude API Key</label>
+          <input class="filter-input" style="width:100%;font-family:var(--font-mono)" type="password" id="set_claude_key" value="{{ settings.claude_api_key }}" placeholder="sk-ant-...">
+        </div>
+        <div>
+          <label class="detail-label">Minimum Match Score Threshold (%)</label>
+          <input class="filter-input" style="width:100%" type="number" id="set_threshold" value="{{ settings.ai_match_threshold }}">
+        </div>
+      </div>
+    </div>
+
+    <!-- Job Ingestion & Scraper Configuration -->
+    <div class="glass" style="padding:1.5rem">
+      <h2 class="section-title" style="margin-bottom:1rem">📡 Job Search Credentials &amp; Targets</h2>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+        <div>
+          <label class="detail-label">Target Keywords (DEFAULT_WHAT)</label>
+          <input class="filter-input" style="width:100%" id="set_what" value="{{ settings.default_what }}">
+        </div>
+        <div>
+          <label class="detail-label">Target Location (DEFAULT_WHERE)</label>
+          <input class="filter-input" style="width:100%" id="set_where" value="{{ settings.default_where }}">
+        </div>
+        <div style="grid-column: span 2">
+          <label class="detail-label">Jooble API Key</label>
+          <input class="filter-input" style="width:100%;font-family:var(--font-mono)" type="password" id="set_jooble_key" value="{{ settings.jooble_api_key }}">
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Right sidebar: Status -->
+  <div>
+    <div class="side-panel" style="padding:1.25rem">
+      <div class="side-panel-head" style="padding:0 0 0.75rem;margin-bottom:1rem">🔌 Credentials Status</div>
+      <div style="display:flex;flex-direction:column;gap:0.75rem;font-size:13px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span>Claude API Key:</span>
+          {% if settings.claude_api_key %}
+          <span style="color:var(--green);font-weight:600">✓ Configured</span>
+          {% else %}
+          <span style="color:var(--orange);font-weight:600">⚠️ Missing</span>
+          {% endif %}
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span>Jooble API Key:</span>
+          {% if settings.jooble_api_key %}
+          <span style="color:var(--green);font-weight:600">✓ Configured</span>
+          {% else %}
+          <span style="color:var(--orange);font-weight:600">⚠️ Missing</span>
+          {% endif %}
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span>Active Provider:</span>
+          <span style="color:var(--cyan);font-weight:600">{{ settings.ai_provider | upper }}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function saveSettings() {
+  const btn = document.getElementById('save-env-btn');
+  btn.textContent = '⏳ Saving…'; btn.disabled = true;
+
+  const payload = {
+    AI_PROVIDER: document.getElementById('set_provider').value,
+    CLAUDE_API_KEY: document.getElementById('set_claude_key').value.trim(),
+    CLAUDE_MODEL: document.getElementById('set_claude_model').value.trim(),
+    DEFAULT_WHAT: document.getElementById('set_what').value.trim(),
+    DEFAULT_WHERE: document.getElementById('set_where').value.trim(),
+    JOOBLE_API_KEY: document.getElementById('set_jooble_key').value.trim(),
+    AI_MATCH_THRESHOLD: parseInt(document.getElementById('set_threshold').value || 50)
+  };
+
+  fetch('/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+  .then(r => r.json())
+  .then(d => {
+    btn.disabled = false; btn.textContent = '⚙️ Save Settings';
+    if (d.status === 'success') {
+      showToast('✅ System settings updated!', 'success');
+      setTimeout(() => location.reload(), 1500);
+    } else {
+      showToast('❌ Error updating settings: ' + d.message, 'error');
+    }
+  })
+  .catch(err => {
+    btn.disabled = false; btn.textContent = '⚙️ Save Settings';
+    showToast('❌ Network error: ' + err, 'error');
+  });
+}
+</script>
+{% endblock %}

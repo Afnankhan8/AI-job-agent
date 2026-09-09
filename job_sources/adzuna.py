@@ -40,6 +40,18 @@ class AdzunaConnector(JobSourceConnector):
                 "Tip: set DEFAULT_COUNTRY=gb in your .env to search UK jobs globally."
             )
 
+        # Warn early: Adzuna's country-specific index won't contain jobs from a different region.
+        # e.g. country=gb + where=UAE will always return 0 results.
+        where_lower = where.lower().strip()
+        MIDDLE_EAST = {"uae", "dubai", "abu dhabi", "sharjah", "saudi", "qatar", "bahrain", "oman", "kuwait"}
+        if country_code in ("gb", "us", "au") and any(loc in where_lower for loc in MIDDLE_EAST):
+            raise JobSourceError(
+                self.name,
+                f"Adzuna country='{country_code}' index has no listings for '{where}'. "
+                "Adzuna does not support UAE/Middle East. Use Jooble or LinkedIn for UAE jobs. "
+                "To suppress this, remove ADZUNA_APP_ID from your .env."
+            )
+
         url = f"{self.BASE_URL}/{country_code}/search/{page}"
         params = {
             "app_id": self.app_id,

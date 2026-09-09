@@ -4,35 +4,56 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}AI Job Agent{% endblock %}</title>
-  <meta name="description" content="AI-powered job hunting dashboard for UAE tech roles" />
+  <meta name="description" content="AI-powered real-time job hunting SaaS platform — Afnan Khan" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
 <body>
-  <!-- Ambient background blobs -->
-  <div class="bg-blob blob-1"></div>
-  <div class="bg-blob blob-2"></div>
-  <div class="bg-blob blob-3"></div>
 
-  <!-- Sidebar nav -->
+  <!-- Animated mesh background -->
+  <div class="bg-mesh"></div>
+
+  <!-- Sidebar -->
   <nav class="sidebar">
     <div class="sidebar-brand">
-      <span class="brand-icon">🤖</span>
-      <span class="brand-name">JobAgent</span>
+      <div class="brand-logo">🤖</div>
+      <div class="brand-text">
+        <span class="brand-name">JobAgent</span>
+        <span class="brand-sub">AI Auto-Pilot</span>
+      </div>
+      <span class="live-badge"><span class="live-dot"></span>LIVE</span>
     </div>
+
+    <p class="nav-section-label">Main Menu</p>
     <ul class="nav-links">
-      <li><a href="{{ url_for('index') }}" class="nav-link {% if request.endpoint == 'index' %}active{% endif %}">
+      <li><a href="{{ url_for('index') }}"
+             class="nav-link {% if request.endpoint == 'index' %}active{% endif %}">
         <span class="nav-icon">⚡</span> Dashboard
       </a></li>
-      <li><a href="{{ url_for('jobs_page') }}" class="nav-link {% if request.endpoint == 'jobs_page' %}active{% endif %}">
+      <li><a href="{{ url_for('jobs_page') }}"
+             class="nav-link {% if request.endpoint == 'jobs_page' %}active{% endif %}">
         <span class="nav-icon">💼</span> Jobs
+        <span class="nav-count" id="nav-count-jobs">—</span>
       </a></li>
-      <li><a href="{{ url_for('applications_page') }}" class="nav-link {% if request.endpoint == 'applications_page' %}active{% endif %}">
+      <li><a href="{{ url_for('applications_page') }}"
+             class="nav-link {% if request.endpoint == 'applications_page' %}active{% endif %}">
         <span class="nav-icon">📋</span> Applications
       </a></li>
+      <li><a href="{{ url_for('profile_page') }}"
+             class="nav-link {% if request.endpoint == 'profile_page' %}active{% endif %}">
+        <span class="nav-icon">👤</span> Candidate Profile
+      </a></li>
+      <li><a href="{{ url_for('settings_page') }}"
+             class="nav-link {% if request.endpoint == 'settings_page' %}active{% endif %}">
+        <span class="nav-icon">⚙️</span> Settings &amp; Keys
+      </a></li>
     </ul>
+
+    <div class="sidebar-divider"></div>
+
+    <p class="nav-section-label">Quick Actions</p>
     <div class="sidebar-actions">
       <button class="btn-action" id="btn-fetch" onclick="triggerFetch()">
         <span>🔄</span> Fetch Jobs
@@ -41,10 +62,14 @@
         <span>🧠</span> Run AI Score
       </button>
     </div>
-    <div class="sidebar-footer">
-      <span class="profile-dot"></span>
-      <span class="profile-name">Afnan Khan</span>
-    </div>
+
+    <a href="{{ url_for('profile_page') }}" class="sidebar-footer" style="text-decoration:none">
+      <div class="profile-avatar">AK</div>
+      <div class="profile-info">
+        <span class="profile-name">Afnan Khan</span>
+        <span class="profile-role">AI Engineer · Dubai ↗</span>
+      </div>
+    </a>
   </nav>
 
   <!-- Main content -->
@@ -52,10 +77,31 @@
     {% block content %}{% endblock %}
   </main>
 
-  <!-- Toast notification -->
+  <!-- Live ticker bar -->
+  <div class="ticker-bar">
+    <div class="ticker-label">
+      <span class="ticker-dot"></span>LIVE JOBS
+    </div>
+    <div class="ticker-track">
+      <div class="ticker-inner" id="ticker-inner">
+        <span class="ticker-item" style="color:var(--text-3)">Loading live feed…</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
   <div id="toast" class="toast hidden"></div>
 
+  <!-- Inspect Application Modal -->
+  <div id="inspect-modal" class="modal-overlay modal-hidden">
+    <div class="modal-box glass">
+      <button onclick="closeInspectModal()" class="modal-close">✕</button>
+      <div id="inspect-modal-content">Loading...</div>
+    </div>
+  </div>
+
   <script src="{{ url_for('static', filename='app.js') }}"></script>
+
   {% block scripts %}{% endblock %}
 </body>
 </html>

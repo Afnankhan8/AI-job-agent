@@ -1,0 +1,43 @@
+{
+  "personal": {
+    "first_name": "John",
+    "last_name": "Doe",
+    "full_name": "John Doe",
+    "email": "johndoe@example.com",
+    "phone": "+1 555 123 4567",
+    "location": "New York, USA",
+    "linkedin_url": "https://linkedin.com/in/johndoe",
+    "linkedin_email": "johndoe@example.com",
+    "linkedin_password": "YOUR_LINKEDIN_PASSWORD",
+    "workday_email": "johndoe@example.com",
+    "workday_password": "YOUR_WORKDAY_PASSWORD",
+    "indeed_email": "johndoe@example.com",
+    "indeed_password": "YOUR_INDEED_PASSWORD",
+    "github_url": "https://github.com/johndoe",
+    "portfolio_url": "https://johndoe.com",
+    "resume_path": "resume.pdf"
+  },
+  "work_preferences": {
+    "desired_title": "AI Engineer",
+    "expected_salary": "Negotiable",
+    "notice_period": "Immediately",
+    "work_authorization": true,
+    "requires_sponsorship": false,
+    "years_of_experience": 2
+  },
+  "skills": [
+    "Python",
+    "Machine Learning",
+    "Deep Learning",
+    "Docker",
+    "Git",
+    "SQL"
+  ],
+  "cover_letter_template": "Dear Hiring Team,\n\nI am excited to apply for this role. I bring strong expertise in Python and machine learning. I would welcome the opportunity to contribute my skills to your team.\n\nThank you for your consideration.\n\nBest regards,\nJohn Doe",
+  "screening_answers": {
+    "authorized_to_work": "Yes",
+    "require_sponsorship": "No",
+    "notice_period": "Immediately",
+    "willing_to_relocate": "Yes"
+  }
+}

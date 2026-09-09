@@ -2,62 +2,79 @@
 {% block title %}Dashboard — AI Job Agent{% endblock %}
 
 {% block content %}
+
+<!-- Page header -->
 <div class="page-header">
   <div>
-    <h1 class="page-title">Dashboard</h1>
-    <p class="page-sub">Your AI-powered job hunt at a glance</p>
+    <h1 class="page-title">Live Job Feed</h1>
+    <p class="page-sub">Real-time AI-powered job hunting · Dubai, UAE · AI Engineer</p>
   </div>
-  <div class="header-time" id="live-time"></div>
+  <div class="header-right">
+    <span class="live-badge"><span class="live-dot"></span>LIVE</span>
+    <div class="header-time" id="live-time"></div>
+  </div>
 </div>
 
-<!-- Stat cards -->
+<!-- Stats grid -->
 <div class="stats-grid" id="stats-grid">
-  <div class="stat-card glass loading">
-    <div class="stat-icon">💼</div>
+  <div class="stat-card card-purple">
+    <div class="stat-top">
+      <span class="stat-icon">💼</span>
+      <span class="stat-trend">↑ Active</span>
+    </div>
     <div class="stat-value" id="s-total">—</div>
-    <div class="stat-label">Total Active Jobs</div>
+    <div class="stat-label">Total Jobs</div>
   </div>
-  <div class="stat-card glass loading">
-    <div class="stat-icon">🔥</div>
+  <div class="stat-card card-fire">
+    <div class="stat-top">
+      <span class="stat-icon">🔥</span>
+      <span class="stat-trend" style="background:rgba(249,115,22,0.15);color:var(--orange)">Fresh</span>
+    </div>
     <div class="stat-value" id="s-today">—</div>
-    <div class="stat-label">New Today</div>
+    <div class="stat-label">Today &amp; New</div>
   </div>
-  <div class="stat-card glass loading">
-    <div class="stat-icon">🧠</div>
+  <div class="stat-card card-cyan">
+    <div class="stat-top">
+      <span class="stat-icon">🧠</span>
+    </div>
     <div class="stat-value" id="s-scored">—</div>
     <div class="stat-label">AI Scored</div>
   </div>
-  <div class="stat-card glass loading">
-    <div class="stat-icon">🟢</div>
+  <div class="stat-card card-green">
+    <div class="stat-top">
+      <span class="stat-icon">🎯</span>
+      <span class="stat-trend">≥80%</span>
+    </div>
     <div class="stat-value" id="s-strong">—</div>
     <div class="stat-label">Strong Matches</div>
   </div>
-  <div class="stat-card glass loading">
-    <div class="stat-icon">✅</div>
+  <div class="stat-card card-pink">
+    <div class="stat-top">
+      <span class="stat-icon">✅</span>
+    </div>
     <div class="stat-value" id="s-applied">—</div>
     <div class="stat-label">Applied</div>
   </div>
-  <div class="stat-card glass loading">
-    <div class="stat-icon">⏳</div>
+  <div class="stat-card card-blue">
+    <div class="stat-top">
+      <span class="stat-icon">⏳</span>
+    </div>
     <div class="stat-value" id="s-pending">—</div>
     <div class="stat-label">Pending</div>
   </div>
 </div>
 
 <!-- Quick actions -->
-<div class="section-header">
-  <h2 class="section-title">Quick Actions</h2>
-</div>
 <div class="quick-actions">
-  <a href="{{ url_for('jobs_page') }}" class="action-card glass">
+  <a href="{{ url_for('jobs_page') }}" class="action-card">
     <div class="action-icon">💼</div>
     <div class="action-text">
-      <strong>Browse Jobs</strong>
+      <strong>Browse All Jobs</strong>
       <span>Filter, sort and review all listings</span>
     </div>
     <span class="action-arrow">→</span>
   </a>
-  <a href="{{ url_for('jobs_page') }}?sort=score&min_score=80" class="action-card glass">
+  <a href="{{ url_for('jobs_page') }}?sort=score&min_score=80" class="action-card">
     <div class="action-icon">🎯</div>
     <div class="action-text">
       <strong>Top Matches</strong>
@@ -65,15 +82,15 @@
     </div>
     <span class="action-arrow">→</span>
   </a>
-  <a href="{{ url_for('jobs_page') }}?freshness=TODAY" class="action-card glass">
+  <a href="{{ url_for('jobs_page') }}?freshness=TODAY" class="action-card">
     <div class="action-icon">🔥</div>
     <div class="action-text">
       <strong>Today's Jobs</strong>
-      <span>Posted today — apply fast</span>
+      <span>Posted today — apply fast!</span>
     </div>
     <span class="action-arrow">→</span>
   </a>
-  <a href="{{ url_for('applications_page') }}" class="action-card glass">
+  <a href="{{ url_for('applications_page') }}" class="action-card">
     <div class="action-icon">📋</div>
     <div class="action-text">
       <strong>Application Log</strong>
@@ -83,72 +100,85 @@
   </a>
 </div>
 
-<!-- Pipeline steps -->
-<div class="section-header" style="margin-top:2rem">
-  <h2 class="section-title">Pipeline</h2>
-  <p class="section-sub">Run each step from the sidebar buttons or CLI</p>
-</div>
-<div class="pipeline">
-  <div class="pipe-step glass">
-    <div class="pipe-num">1</div>
-    <div class="pipe-info">
-      <strong>Fetch Jobs</strong>
-      <span>Scrapes LinkedIn, Adzuna, Jooble for new listings</span>
-    </div>
-    <code>python main.py</code>
-  </div>
-  <div class="pipe-arrow">→</div>
-  <div class="pipe-step glass">
-    <div class="pipe-num">2</div>
-    <div class="pipe-info">
-      <strong>Fetch Descriptions</strong>
-      <span>Parallel scrape of each job page (auto-runs after fetch)</span>
-    </div>
-    <code>automatic</code>
-  </div>
-  <div class="pipe-arrow">→</div>
-  <div class="pipe-step glass">
-    <div class="pipe-num">3</div>
-    <div class="pipe-info">
-      <strong>AI Scoring</strong>
-      <span>Ollama matches jobs to your profile (requires local Ollama)</span>
-    </div>
-    <code>python main.py --score-only</code>
-  </div>
-  <div class="pipe-arrow">→</div>
-  <div class="pipe-step glass">
-    <div class="pipe-num">4</div>
-    <div class="pipe-info">
-      <strong>Auto-Apply</strong>
-      <span>Playwright fills & submits forms with AI cover letter</span>
-    </div>
-    <code>python main.py --auto-apply</code>
-  </div>
-</div>
-{% endblock %}
+<!-- Two-column layout: Feed + Sidebar -->
+<div class="two-col">
 
-{% block scripts %}
-<script>
-  // Live clock
-  function updateTime() {
-    const now = new Date();
-    document.getElementById('live-time').textContent =
-      now.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-  }
-  updateTime();
-  setInterval(updateTime, 1000);
+  <!-- Left: Live job feed -->
+  <div>
+    <div class="section-head">
+      <h2 class="section-title">
+        <span class="icon">📡</span> Trending Now
+      </h2>
+      <a href="{{ url_for('jobs_page') }}" class="section-link">See all →</a>
+    </div>
+    <div class="feed-list" id="live-feed">
+      <!-- Filled by JS via /api/feed -->
+      <div class="empty-state glass">
+        <div class="empty-icon">⏳</div>
+        <h3>Loading jobs…</h3>
+        <p>Connecting to live feed…</p>
+      </div>
+    </div>
+  </div>
 
-  // Load stats
-  fetch('/api/stats')
-    .then(r => r.json())
-    .then(d => {
-      document.getElementById('s-total').textContent = d.total;
-      document.getElementById('s-today').textContent = d.today;
-      document.getElementById('s-scored').textContent = d.scored;
-      document.getElementById('s-strong').textContent = d.strong;
-      document.getElementById('s-applied').textContent = d.applied;
-      document.getElementById('s-pending').textContent = d.pending;
-      document.querySelectorAll('.stat-card').forEach(c => c.classList.remove('loading'));
-    });
-</script>
+  <!-- Right: Trending sidebar -->
+  <div>
+
+    <!-- Trending companies -->
+    <div class="side-panel">
+      <div class="side-panel-head">🏆 Trending Employers</div>
+      <div class="side-panel-body" id="trending-companies">
+        <div style="padding:1rem;color:var(--text-3);font-size:13px">Loading…</div>
+      </div>
+    </div>
+
+    <!-- Score distribution -->
+    <div class="side-panel">
+      <div class="side-panel-head">🧠 AI Match Breakdown</div>
+      <div class="score-dist" id="score-dist">
+        <div class="score-dist-item strong"><div class="score-dist-num">—</div><div class="score-dist-lbl">Strong</div></div>
+        <div class="score-dist-item good">  <div class="score-dist-num">—</div><div class="score-dist-lbl">Good</div></div>
+        <div class="score-dist-item weak">  <div class="score-dist-num">—</div><div class="score-dist-lbl">Weak</div></div>
+      </div>
+    </div>
+
+    <!-- Source distribution -->
+    <div class="side-panel">
+      <div class="side-panel-head">📊 Sources</div>
+      <div id="source-bars">
+        <div style="padding:0.75rem 1rem;color:var(--text-3);font-size:13px">Loading…</div>
+      </div>
+    </div>
+
+    <!-- Pipeline steps -->
+    <div class="side-panel">
+      <div class="side-panel-head">⚙️ Pipeline</div>
+      <div class="side-panel-body">
+        <div class="trend-row" style="gap:0.75rem;padding:0.65rem 1rem">
+          <span style="font-size:18px">1️⃣</span>
+          <div>
+            <div style="font-size:12px;font-weight:600">Fetch Jobs</div>
+            <code style="font-size:10px;font-family:var(--font-mono);color:var(--cyan)">python main.py</code>
+          </div>
+        </div>
+        <div class="trend-row" style="gap:0.75rem;padding:0.65rem 1rem">
+          <span style="font-size:18px">2️⃣</span>
+          <div>
+            <div style="font-size:12px;font-weight:600">AI Score (Claude)</div>
+            <code style="font-size:10px;font-family:var(--font-mono);color:var(--cyan)">python main.py --score-only</code>
+          </div>
+        </div>
+        <div class="trend-row" style="gap:0.75rem;padding:0.65rem 1rem">
+          <span style="font-size:18px">3️⃣</span>
+          <div>
+            <div style="font-size:12px;font-weight:600">Auto-Apply</div>
+            <code style="font-size:10px;font-family:var(--font-mono);color:var(--cyan)">python main.py --auto-apply</code>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
 {% endblock %}

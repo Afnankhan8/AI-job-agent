@@ -101,15 +101,26 @@ def run_ingestion(what: str, where: str, pages: int) -> int:
         for connector in connectors:
             src = connector.name
             if src not in per_source:
-                per_source[src] = {"inserted": 0, "updated": 0, "failed": 0}
+                per_source[src] = {"inserted": 0, "updated": 0, "failed": 0, "skipped": 0}
 
             for page in range(1, pages + 1):
                 try:
                     raw_jobs = _fetch(connector, kw, where, page)
                 except JobSourceError as e:
-                    print(f"    [{src}] notice on '{kw}' p{page}: {e.message}")
-                    per_source[src]["failed"] += 1
-                    totals["failed"] += 1
+                    # Distinguish "not supported for this region" (skip) vs real errors
+                    is_skip = any(phrase in e.message for phrase in [
+                        "has no listings for",
+                        "does not support",
+                        "not supported",
+                    ])
+                    if is_skip:
+                        if page == 1:   # Only print skip notice once per keyword
+                            print(f"    [{src}] skipped for '{kw}': {e.message}")
+                        per_source[src]["skipped"] += 1
+                    else:
+                        print(f"    [{src}] notice on '{kw}' p{page}: {e.message}")
+                        per_source[src]["failed"] += 1
+                        totals["failed"] += 1
                     break   # stop paging this source/keyword on error
 
                 if not raw_jobs:
@@ -138,10 +149,16 @@ def run_ingestion(what: str, where: str, pages: int) -> int:
     print("     JOB INGESTION — SUMMARY")
     print("====================================")
     for src, stats in per_source.items():
-        print(f"  [{src}]  new: {stats['inserted']}  updated: {stats['updated']}  failed: {stats['failed']}")
+        skip_str = f"  skipped: {stats['skipped']}" if stats.get("skipped") else ""
+        fail_str = f"  failed: {stats['failed']}" if stats.get("failed") else ""
+        print(f"  [{src}]  new: {stats['inserted']}  updated: {stats['updated']}{skip_str}{fail_str}")
     print(f"  TOTAL new jobs  : {totals['inserted']}")
     print(f"  TOTAL updated   : {totals['updated']}")
     print("====================================\n")
+
+    pruned = repo.prune_expired_jobs(30)
+    if pruned > 0:
+        print(f"  [Database] Cleaned up {pruned} jobs older than 1 month (moved to bucket list).\n")
 
     return totals["inserted"]
 
@@ -155,8 +172,8 @@ def run_description_fetch(limit: int = 200) -> None:
 
 
 def run_ai_scoring() -> None:
-    """Score unanalyzed jobs with Ollama (skipped silently if Ollama is offline)."""
-    from ai.ollama_client import OllamaClient
+    """Score unanalyzed jobs with the configured AI provider (Claude or Ollama)."""
+    from ai import get_ai_client
     from ai.scorer import score_unanalyzed_jobs
     from config.profile_loader import CandidateProfile
 
@@ -166,20 +183,33 @@ def run_ai_scoring() -> None:
         print(f"  [AI scorer] Skipped — could not load profile: {e}")
         return
 
-    ai_client = OllamaClient(
-        base_url=SETTINGS.ollama_base_url,
-        model=SETTINGS.ollama_model,
-    )
-    if not ai_client.health_check():
-        print(f"  [AI scorer] Skipped — Ollama not reachable at {SETTINGS.ollama_base_url}")
-        print("  Run 'ollama serve' and 'ollama pull qwen3-coder:30b' to enable AI scoring.\n")
+    try:
+        ai_client = get_ai_client()
+    except ValueError as e:
+        print(f"  [AI scorer] Skipped — {e}")
         return
 
-    print(f"  [AI scorer] Ollama connected ({SETTINGS.ollama_model}) — scoring jobs...\n")
+    if not ai_client.health_check():
+        provider = SETTINGS.ai_provider.upper()
+        if SETTINGS.ai_provider == "ollama":
+            print(f"  [AI scorer] Skipped — Ollama not reachable at {SETTINGS.ollama_base_url}")
+            print("  Run 'ollama serve' and 'ollama pull qwen3-coder:30b' to enable AI scoring.\n")
+        else:
+            print(f"  [AI scorer] Skipped — {provider} client not ready. Check your API key.\n")
+        return
+
+    provider_label = (
+        f"Claude ({SETTINGS.claude_model})"
+        if SETTINGS.ai_provider == "claude"
+        else f"Ollama ({SETTINGS.ollama_model})"
+    )
+    print(f"  [AI scorer] {provider_label} — scoring jobs...\n")
+
     conn = get_connection(SETTINGS.database_path)
     repo = JobRepository(conn)
     score_unanalyzed_jobs(repo, profile, ai_client, limit=200)
     conn.close()
+
 
 
 # ── Display ────────────────────────────────────────────────────────────────────

@@ -2,7 +2,7 @@
 scorer.py — Standalone AI scoring loop.
 
 Loops through active jobs that have descriptions but no AI score yet,
-calls the Ollama job matcher, and stores the result.
+calls the configured AI client (Claude or Ollama), and stores the result.
 
 Usage:
     python main.py --score-only      # score via CLI
@@ -13,14 +13,13 @@ from config.settings import SETTINGS
 from config.profile_loader import CandidateProfile
 from database.models import init_db, get_connection
 from database.repository import JobRepository
-from ai.ollama_client import OllamaClient
 from ai.job_matcher import match_job
 
 
 def score_unanalyzed_jobs(
     repo: JobRepository,
     profile: CandidateProfile,
-    ai_client: OllamaClient,
+    ai_client,           # OllamaClient or ClaudeClient — both share the same interface
     limit: int = 100,
     verbose: bool = True,
 ) -> dict:
@@ -98,16 +97,26 @@ if __name__ == "__main__":
         print(f"  ERROR loading profile: {e}")
         sys.exit(1)
 
-    ai_client = OllamaClient(
-        base_url=SETTINGS.ollama_base_url,
-        model=SETTINGS.ollama_model,
-    )
-    if not ai_client.health_check():
-        print(f"  ERROR: Ollama not reachable at {SETTINGS.ollama_base_url}")
-        print("  Start Ollama with: ollama serve")
+    from ai import get_ai_client
+    try:
+        ai_client = get_ai_client()
+    except ValueError as e:
+        print(f"  ERROR: {e}")
         sys.exit(1)
 
-    print(f"  Model   : {SETTINGS.ollama_model}")
+    if not ai_client.health_check():
+        provider = SETTINGS.ai_provider.upper()
+        print(f"  ERROR: {provider} AI client not available. Check your .env configuration.")
+        if SETTINGS.ai_provider == "ollama":
+            print("  Start Ollama with: ollama serve")
+        sys.exit(1)
+
+    provider_label = (
+        f"Claude ({SETTINGS.claude_model})"
+        if SETTINGS.ai_provider == "claude"
+        else f"Ollama ({SETTINGS.ollama_model})"
+    )
+    print(f"  Model   : {provider_label}")
     print(f"  Threshold: {SETTINGS.ai_match_threshold}%\n")
 
     init_db(SETTINGS.database_path)

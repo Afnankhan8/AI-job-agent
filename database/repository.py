@@ -130,7 +130,6 @@ class JobRepository:
             FROM   jobs j
             LEFT   JOIN applications a
                    ON  a.job_id = j.id
-                   AND a.status IN ('APPLIED', 'PENDING')
             WHERE  j.status = 'ACTIVE'
             AND    a.id IS NULL
             ORDER  BY j.last_seen_at DESC
@@ -139,6 +138,20 @@ class JobRepository:
             (limit,),
         ).fetchall()
         return [self._row_to_job(r) for r in rows]
+
+    def prune_expired_jobs(self, days: int = 30) -> int:
+        """Mark jobs that haven't been seen in `days` as EXPIRED."""
+        cursor = self.conn.execute(
+            """
+            UPDATE jobs
+            SET status = 'EXPIRED'
+            WHERE status = 'ACTIVE'
+            AND last_seen_at < datetime('now', '-' || ? || ' days')
+            """,
+            (days,)
+        )
+        self.conn.commit()
+        return cursor.rowcount
 
     # ── AI Analysis ───────────────────────────────────────────────────────────
 

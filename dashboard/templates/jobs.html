@@ -4,75 +4,92 @@
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">Jobs</h1>
-    <p class="page-sub">{{ total }} listing{{ 's' if total != 1 else '' }} found</p>
+    <h1 class="page-title">All Jobs</h1>
+    <p class="page-sub">
+      <span style="color:var(--purple);font-weight:600">{{ total }}</span>
+      listing{{ 's' if total != 1 else '' }} found
+    </p>
+  </div>
+  <div class="header-right">
+    <div class="header-time" id="live-time"></div>
   </div>
 </div>
 
 <!-- Filters -->
 <form class="filters glass" method="GET" action="{{ url_for('jobs_page') }}">
-  <input class="filter-input" type="text" name="q" placeholder="Search title or company…" value="{{ q }}">
+  <input class="filter-input" type="text" name="q"
+    placeholder="🔍  Search title or company…" value="{{ q }}">
 
   <select class="filter-select" name="freshness">
-    <option value="">All freshness</option>
+    <option value="">⏱ All freshness</option>
     {% for f in ['TODAY','NEW','RECENT','OLD'] %}
-    <option value="{{ f }}" {% if freshness == f %}selected{% endif %}>{{ f }}</option>
+    <option value="{{ f }}" {% if freshness == f %}selected{% endif %}>
+      {% if f == 'TODAY' %}🔥{% elif f == 'NEW' %}⚡{% elif f == 'RECENT' %}✨{% else %}📁{% endif %}
+      {{ f }}
+    </option>
     {% endfor %}
   </select>
 
   <select class="filter-select" name="source">
-    <option value="">All sources</option>
+    <option value="">📡 All sources</option>
     {% for s in ['linkedin','adzuna','jooble'] %}
-    <option value="{{ s }}" {% if source == s %}selected{% endif %}>{{ s }}</option>
+    <option value="{{ s }}" {% if source == s %}selected{% endif %}>{{ s|capitalize }}</option>
     {% endfor %}
   </select>
 
   <select class="filter-select" name="min_score">
-    <option value="">Any AI score</option>
-    <option value="80" {% if min_score == '80' %}selected{% endif %}>80%+ Strong</option>
-    <option value="60" {% if min_score == '60' %}selected{% endif %}>60%+ Good</option>
-    <option value="40" {% if min_score == '40' %}selected{% endif %}>40%+ Weak</option>
+    <option value="">🧠 Any AI score</option>
+    <option value="80" {% if min_score == '80' %}selected{% endif %}>🟢 80%+ Strong</option>
+    <option value="60" {% if min_score == '60' %}selected{% endif %}>🔵 60%+ Good</option>
+    <option value="40" {% if min_score == '40' %}selected{% endif %}>🟡 40%+ Weak</option>
   </select>
 
   <select class="filter-select" name="sort">
-    <option value="recent" {% if sort == 'recent' %}selected{% endif %}>Most Recent</option>
-    <option value="score"  {% if sort == 'score'  %}selected{% endif %}>Highest Score</option>
-    <option value="company" {% if sort == 'company' %}selected{% endif %}>Company A–Z</option>
+    <option value="recent"  {% if sort == 'recent'  %}selected{% endif %}>📅 Most Recent</option>
+    <option value="score"   {% if sort == 'score'   %}selected{% endif %}>🎯 Highest Score</option>
+    <option value="company" {% if sort == 'company' %}selected{% endif %}>🏢 Company A–Z</option>
   </select>
 
   <button class="btn-filter" type="submit">Filter</button>
   <a class="btn-clear" href="{{ url_for('jobs_page') }}">Clear</a>
 </form>
 
-<!-- Jobs table -->
-<div class="jobs-list">
+<!-- Jobs list -->
+<div class="jobs-grid">
   {% for job in jobs %}
   {% set score = job.ai_match_score %}
-  {% set rec = job.ai_recommendation %}
-  <a href="{{ url_for('job_detail', job_id=job.id) }}" class="job-card glass">
-    <div class="job-card-left">
-      <div class="job-freshness {{ (job.freshness_label or 'OLD')|lower }}">
-        {{ job.freshness_label or 'OLD' }}
+  {% set rec   = job.ai_recommendation %}
+  {% set fCls  = {'TODAY':'today','NEW':'new','RECENT':'recent','OLD':'old'}.get(job.freshness_label or 'OLD','old') %}
+  {% set fEmoji = {'today':'🔥','new':'⚡','recent':'✨','old':''}.get(fCls,'') %}
+
+  <a href="{{ url_for('job_detail', job_id=job.id) }}" class="job-card">
+    <!-- Freshness pill -->
+    <span class="fresh-pill fresh-{{ fCls }}">{{ fEmoji }} {{ job.freshness_label or 'OLD' }}</span>
+
+    <!-- Main info -->
+    <div class="job-card-body">
+      <div class="job-title">{{ job.title }}</div>
+      <div class="job-meta">
+        <span>🏢 {{ job.company or 'Unknown' }}</span>
+        <span class="divider">·</span>
+        <span>📍 {{ job.location or 'Unknown' }}</span>
+        <span class="divider">·</span>
+        {% for s in job.found_on_sources %}
+        <span class="source-pill {{ s }}">{{ s }}</span>
+        {% endfor %}
       </div>
-      <div class="job-info">
-        <div class="job-title">{{ job.title }}</div>
-        <div class="job-meta">
-          <span class="job-company">{{ job.company or 'Unknown' }}</span>
-          <span class="divider">·</span>
-          <span class="job-location">{{ job.location or 'Unknown' }}</span>
-          <span class="divider">·</span>
-          <span class="job-source">via {{ job.found_on_sources | join(', ') }}</span>
-        </div>
-        {% if job.description %}
-        <div class="job-excerpt">{{ job.description[:180] }}…</div>
-        {% else %}
-        <div class="job-excerpt no-desc">No description fetched yet</div>
-        {% endif %}
-      </div>
+      {% if job.description %}
+      <div class="job-excerpt">{{ job.description[:160] }}</div>
+      {% else %}
+      <div class="job-excerpt" style="color:var(--text-3);font-style:italic">No description fetched yet</div>
+      {% endif %}
     </div>
-    <div class="job-card-right">
-      {% if score is not none %}
-      <div class="score-ring {{ rec|lower if rec else 'unscored' }}">
+
+    <!-- Score ring -->
+    {% if score is not none %}
+    {% set recCls = (rec or '').lower() or 'unscored' %}
+    <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex-shrink:0">
+      <div class="score-ring {{ recCls }}">
         <svg viewBox="0 0 36 36">
           <path class="ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
           <path class="ring-fill" stroke-dasharray="{{ score }}, 100"
@@ -80,8 +97,10 @@
         </svg>
         <span class="score-pct">{{ score }}%</span>
       </div>
-      <div class="score-label {{ rec|lower if rec else '' }}">{{ rec or '' }}</div>
-      {% else %}
+      <div class="score-label {{ recCls }}">{{ rec or '' }}</div>
+    </div>
+    {% else %}
+    <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex-shrink:0">
       <div class="score-ring unscored">
         <svg viewBox="0 0 36 36">
           <path class="ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
@@ -90,10 +109,11 @@
         </svg>
         <span class="score-pct">?</span>
       </div>
-      <div class="score-label">Not scored</div>
-      {% endif %}
+      <div class="score-label" style="color:var(--text-3)">Unscored</div>
     </div>
+    {% endif %}
   </a>
+
   {% else %}
   <div class="empty-state glass">
     <div class="empty-icon">🔍</div>

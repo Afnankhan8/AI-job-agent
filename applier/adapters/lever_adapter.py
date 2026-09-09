@@ -36,6 +36,7 @@ class LeverAdapter(BaseAdapter):
         ai_answers: Optional[dict] = None,
         screenshots_dir: str = "applications/screenshots",
         ai_client=None,
+        **kwargs,
     ) -> AdapterOutcome:
         logs = [f"[lever] Applying to: {job.title} @ {job.company}"]
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")

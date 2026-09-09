@@ -36,6 +36,8 @@ class BaseAdapter(ABC):
         ai_cover_letter: Optional[str] = None,
         ai_answers: Optional[dict] = None,
         screenshots_dir: str = "applications/screenshots",
+        ai_client=None,
+        **kwargs,
     ) -> AdapterOutcome:
         """Execute the full application flow for one job."""
         ...

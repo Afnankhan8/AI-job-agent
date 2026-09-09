@@ -1,0 +1,218 @@
+{% extends "base.html" %}
+{% block title %}Candidate Profile — AI Job Agent{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Candidate Profile &amp; Resume</h1>
+    <p class="page-sub">Configure candidate details used for AI matching and auto-filling forms</p>
+  </div>
+  <div class="header-right">
+    <button class="btn-filter" id="save-btn" onclick="saveProfile()">💾 Save Profile</button>
+  </div>
+</div>
+
+<div class="two-col" style="grid-template-columns: 1fr 340px">
+  <div style="display:flex;flex-direction:column;gap:1.25rem">
+    
+    <!-- Personal Information -->
+    <div class="glass" style="padding:1.5rem">
+      <h2 class="section-title" style="margin-bottom:1rem">👤 Personal Information</h2>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+        <div>
+          <label class="detail-label">First Name</label>
+          <input class="filter-input" style="width:100%" id="p_first_name" value="{{ profile.personal.first_name if profile.personal else '' }}">
+        </div>
+        <div>
+          <label class="detail-label">Last Name</label>
+          <input class="filter-input" style="width:100%" id="p_last_name" value="{{ profile.personal.last_name if profile.personal else '' }}">
+        </div>
+        <div>
+          <label class="detail-label">Email Address</label>
+          <input class="filter-input" style="width:100%" id="p_email" value="{{ profile.personal.email if profile.personal else '' }}">
+        </div>
+        <div>
+          <label class="detail-label">Phone Number</label>
+          <input class="filter-input" style="width:100%" id="p_phone" value="{{ profile.personal.phone if profile.personal else '' }}">
+        </div>
+        <div>
+          <label class="detail-label">Current Location</label>
+          <input class="filter-input" style="width:100%" id="p_location" value="{{ profile.personal.location if profile.personal else '' }}">
+        </div>
+        <div>
+          <label class="detail-label">LinkedIn URL</label>
+          <input class="filter-input" style="width:100%" id="p_linkedin_url" value="{{ profile.personal.linkedin_url if profile.personal else '' }}">
+        </div>
+        <div>
+          <label class="detail-label">GitHub URL</label>
+          <input class="filter-input" style="width:100%" id="p_github_url" value="{{ profile.personal.github_url if profile.personal else '' }}">
+        </div>
+        <div>
+          <label class="detail-label">Portfolio URL</label>
+          <input class="filter-input" style="width:100%" id="p_portfolio_url" value="{{ profile.personal.portfolio_url if profile.personal else '' }}">
+        </div>
+      </div>
+    </div>
+
+    <!-- Target Work Preferences -->
+    <div class="glass" style="padding:1.5rem">
+      <h2 class="section-title" style="margin-bottom:1rem">🎯 Work Preferences &amp; Target Roles</h2>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+        <div>
+          <label class="detail-label">Desired Job Title</label>
+          <input class="filter-input" style="width:100%" id="w_desired_title" value="{{ profile.work_preferences.desired_title if profile.work_preferences else '' }}">
+        </div>
+        <div>
+          <label class="detail-label">Years of Experience</label>
+          <input class="filter-input" style="width:100%" type="number" id="w_years" value="{{ profile.work_preferences.years_of_experience if profile.work_preferences else 2 }}">
+        </div>
+        <div>
+          <label class="detail-label">Expected Salary</label>
+          <input class="filter-input" style="width:100%" id="w_salary" value="{{ profile.work_preferences.expected_salary if profile.work_preferences else 'Negotiable' }}">
+        </div>
+        <div>
+          <label class="detail-label">Notice Period</label>
+          <input class="filter-input" style="width:100%" id="w_notice" value="{{ profile.work_preferences.notice_period if profile.work_preferences else 'Immediately' }}">
+        </div>
+      </div>
+    </div>
+
+    <!-- Skills -->
+    <div class="glass" style="padding:1.5rem">
+      <h2 class="section-title" style="margin-bottom:0.5rem">🛠 Skills &amp; Tech Stack</h2>
+      <p class="section-sub" style="margin-bottom:1rem">Comma-separated list of skills evaluated by AI matcher</p>
+      <textarea class="filter-input" style="width:100%;height:90px;font-family:var(--font-mono)" id="p_skills">{{ (profile.skills or []) | join(', ') }}</textarea>
+    </div>
+
+    <!-- Cover Letter Template -->
+    <div class="glass" style="padding:1.5rem">
+      <h2 class="section-title" style="margin-bottom:0.5rem">✉️ Default Cover Letter Template</h2>
+      <p class="section-sub" style="margin-bottom:1rem">AI uses this base structure when tailoring customized letters</p>
+      <textarea class="filter-input" style="width:100%;height:140px;line-height:1.6" id="p_cover">{{ profile.cover_letter_template or '' }}</textarea>
+    </div>
+
+  </div>
+
+  <!-- Right sidebar: Portal Accounts & Screening -->
+  <div style="display:flex;flex-direction:column;gap:1.25rem">
+    <!-- Portal Login Credentials -->
+    <div class="side-panel" style="padding:1.25rem">
+      <div class="side-panel-head" style="padding:0 0 0.75rem;margin-bottom:1rem">🔐 Portal Login Passwords</div>
+      <p class="section-sub" style="margin-bottom:1rem">Stored locally on your machine for auto-login</p>
+      
+      <div style="display:flex;flex-direction:column;gap:0.75rem">
+        <div>
+          <label class="detail-label">LinkedIn Password</label>
+          <input class="filter-input" style="width:100%" type="password" id="p_linkedin_pw" value="{{ profile.personal.linkedin_password if profile.personal else '' }}">
+        </div>
+        <div>
+          <label class="detail-label">Workday Password</label>
+          <input class="filter-input" style="width:100%" type="password" id="p_workday_pw" value="{{ profile.personal.workday_password if profile.personal else '' }}">
+        </div>
+        <div>
+          <label class="detail-label">Indeed Password</label>
+          <input class="filter-input" style="width:100%" type="password" id="p_indeed_pw" value="{{ profile.personal.indeed_password if profile.personal else '' }}">
+        </div>
+      </div>
+    </div>
+
+    <!-- Auto Screening Answers -->
+    <div class="side-panel" style="padding:1.25rem">
+      <div class="side-panel-head" style="padding:0 0 0.75rem;margin-bottom:1rem">📋 Default Screening Answers</div>
+      <div style="display:flex;flex-direction:column;gap:0.75rem">
+        <div>
+          <label class="detail-label">Authorized to Work?</label>
+          <select class="filter-select" style="width:100%" id="s_authorized">
+            <option value="Yes" {% if profile.screening_answers and profile.screening_answers.authorized_to_work == 'Yes' %}selected{% endif %}>Yes</option>
+            <option value="No" {% if profile.screening_answers and profile.screening_answers.authorized_to_work == 'No' %}selected{% endif %}>No</option>
+          </select>
+        </div>
+        <div>
+          <label class="detail-label">Require Sponsorship?</label>
+          <select class="filter-select" style="width:100%" id="s_sponsorship">
+            <option value="No" {% if profile.screening_answers and profile.screening_answers.require_sponsorship == 'No' %}selected{% endif %}>No</option>
+            <option value="Yes" {% if profile.screening_answers and profile.screening_answers.require_sponsorship == 'Yes' %}selected{% endif %}>Yes</option>
+          </select>
+        </div>
+        <div>
+          <label class="detail-label">Willing to Relocate?</label>
+          <select class="filter-select" style="width:100%" id="s_relocate">
+            <option value="Yes" {% if profile.screening_answers and profile.screening_answers.willing_to_relocate == 'Yes' %}selected{% endif %}>Yes</option>
+            <option value="No" {% if profile.screening_answers and profile.screening_answers.willing_to_relocate == 'No' %}selected{% endif %}>No</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function saveProfile() {
+  const btn = document.getElementById('save-btn');
+  btn.textContent = '⏳ Saving…'; btn.disabled = true;
+
+  const first = document.getElementById('p_first_name').value.trim();
+  const last  = document.getElementById('p_last_name').value.trim();
+  const skillsRaw = document.getElementById('p_skills').value;
+  const skills = skillsRaw.split(',').map(s => s.trim()).filter(Boolean);
+
+  const payload = {
+    personal: {
+      first_name: first,
+      last_name: last,
+      full_name: `${first} ${last}`.trim(),
+      email: document.getElementById('p_email').value.trim(),
+      phone: document.getElementById('p_phone').value.trim(),
+      location: document.getElementById('p_location').value.trim(),
+      linkedin_url: document.getElementById('p_linkedin_url').value.trim(),
+      linkedin_email: document.getElementById('p_email').value.trim(),
+      linkedin_password: document.getElementById('p_linkedin_pw').value,
+      workday_email: document.getElementById('p_email').value.trim(),
+      workday_password: document.getElementById('p_workday_pw').value,
+      indeed_email: document.getElementById('p_email').value.trim(),
+      indeed_password: document.getElementById('p_indeed_pw').value,
+      github_url: document.getElementById('p_github_url').value.trim(),
+      portfolio_url: document.getElementById('p_portfolio_url').value.trim(),
+      resume_path: "resume.pdf"
+    },
+    work_preferences: {
+      desired_title: document.getElementById('w_desired_title').value.trim(),
+      expected_salary: document.getElementById('w_salary').value.trim(),
+      notice_period: document.getElementById('w_notice').value.trim(),
+      work_authorization: true,
+      requires_sponsorship: false,
+      years_of_experience: parseInt(document.getElementById('w_years').value || 2)
+    },
+    skills: skills,
+    cover_letter_template: document.getElementById('p_cover').value,
+    screening_answers: {
+      authorized_to_work: document.getElementById('s_authorized').value,
+      require_sponsorship: document.getElementById('s_sponsorship').value,
+      notice_period: document.getElementById('w_notice').value.trim(),
+      willing_to_relocate: document.getElementById('s_relocate').value
+    }
+  };
+
+  fetch('/profile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+  .then(r => r.json())
+  .then(d => {
+    btn.disabled = false; btn.textContent = '💾 Save Profile';
+    if (d.status === 'success') {
+      showToast('✅ Profile saved successfully!', 'success');
+    } else {
+      showToast('❌ Error saving profile: ' + d.message, 'error');
+    }
+  })
+  .catch(err => {
+    btn.disabled = false; btn.textContent = '💾 Save Profile';
+    showToast('❌ Network error: ' + err, 'error');
+  });
+}
+</script>
+{% endblock %}

@@ -5,16 +5,14 @@ Handles ONE upfront login per platform before the apply loop starts.
 Because we use a persistent BrowserContext (browser_profile/), cookies
 survive across runs — subsequent runs skip the login page entirely.
 
-Usage:
-    from applier.session_manager import SessionManager
-    manager = SessionManager(context, profile)
-    manager.ensure_all_sessions()          # logs in to all needed platforms
-    manager.ensure_linkedin()              # only LinkedIn
-    is_logged = manager.is_linkedin_logged_in()
+Auto-login: if session expires mid-run, automatically re-logs in using
+credentials from config/user_profile.json. No manual steps required.
 """
 
 import time
+import re
 from typing import Optional
+from urllib.parse import urlparse
 
 from playwright.sync_api import BrowserContext, Page
 
@@ -25,13 +23,13 @@ class SessionManager:
     """
     Manages persistent login sessions for all job platforms.
 
-    Login happens ONCE per platform. Cookies are stored in the persistent
-    browser_profile/ directory and reused on subsequent runs.
+    Login happens ONCE per platform (or auto-re-login on session expiry).
+    Cookies are stored in browser_profile/ and reused on subsequent runs.
     """
 
-    LINKEDIN_HOME = "https://www.linkedin.com"
+    LINKEDIN_HOME  = "https://www.linkedin.com"
     LINKEDIN_LOGIN = "https://www.linkedin.com/login"
-    LINKEDIN_FEED = "https://www.linkedin.com/feed"
+    LINKEDIN_FEED  = "https://www.linkedin.com/feed"
 
     def __init__(self, context: BrowserContext, profile: CandidateProfile, verbose: bool = True):
         self.context = context
@@ -58,15 +56,30 @@ class SessionManager:
     def ensure_linkedin(self) -> bool:
         """
         Ensure we have a live LinkedIn session.
-        Returns True if logged in (either already was, or just logged in now).
+        Auto-logs in if session expired. Returns True if logged in.
         """
         self._log("Checking LinkedIn session...")
         if self.is_linkedin_logged_in():
-            self._log("LinkedIn: already logged in (session cookie active).")
+            self._log("LinkedIn: already logged in ✓")
             self._linkedin_ok = True
             return True
 
-        self._log("LinkedIn: not logged in — attempting login now...")
+        self._log("LinkedIn: session expired — auto-logging in with stored credentials...")
+        success = self._login_linkedin()
+        self._linkedin_ok = success
+        if success:
+            self._log("LinkedIn: auto-login successful ✓")
+        else:
+            self._log("LinkedIn: auto-login failed ✗ — check credentials in config/user_profile.json")
+        return success
+
+    def re_login_linkedin(self) -> bool:
+        """
+        Force a fresh LinkedIn login even if session appears active.
+        Called by adapters when they hit an authwall mid-apply.
+        """
+        self._log("LinkedIn: forced re-login triggered...")
+        self._linkedin_ok = False
         success = self._login_linkedin()
         self._linkedin_ok = success
         return success
@@ -76,34 +89,36 @@ class SessionManager:
         page = self._new_page()
         try:
             page.goto(self.LINKEDIN_FEED, wait_until="domcontentloaded", timeout=20000)
-            page.wait_for_timeout(2000)
+            page.wait_for_timeout(2500)
             url = page.url
-            # If we got redirected to login/signup, we're not logged in
-            if "/login" in url or "/signup" in url or "/authwall" in url:
+            if any(x in url for x in ["/login", "/signup", "/authwall", "/uas/login"]):
                 return False
-            # Check for a nav element that only appears when logged in
             logged_in = page.locator(
                 "[data-control-name='nav.homepage'], "
                 ".global-nav__me-photo, "
                 "img.nav-item__profile-member-photo, "
-                "[aria-label='Home']"
-            ).first.is_visible(timeout=3000)
+                "[aria-label='Home'], "
+                ".feed-identity-module"
+            ).first.is_visible(timeout=4000)
             return logged_in
         except Exception:
             return False
         finally:
-            page.close()
+            try:
+                page.close()
+            except Exception:
+                pass
 
     # ── Login implementations ──────────────────────────────────────────────────
 
     def _login_linkedin(self) -> bool:
         """
-        Full LinkedIn login flow:
+        Fully automatic LinkedIn login:
           1. Navigate to /login
-          2. Fill email + password
+          2. Fill email + password from profile
           3. Submit and wait for redirect
-          4. Handle 2FA or CAPTCHA if present (pause for manual resolution)
-          5. Verify logged in by checking the feed URL
+          4. Auto-handle CAPTCHA/2FA — wait up to 90s per challenge
+          5. Verify logged in via feed URL
         """
         p = self.profile.personal
         if not p.linkedin_email or not p.linkedin_password:
@@ -112,99 +127,169 @@ class SessionManager:
 
         page = self._new_page()
         try:
-            self._log(f"Navigating to {self.LINKEDIN_LOGIN}...")
+            self._log("Clearing stale cookies to prevent Sign-Up redirect traps...")
+            self.context.clear_cookies()
+            
+            self._log(f"Opening LinkedIn login page ({self.LINKEDIN_LOGIN})...")
             page.goto(self.LINKEDIN_LOGIN, wait_until="domcontentloaded", timeout=20000)
-            page.wait_for_timeout(1500)
+            page.wait_for_timeout(3000)
 
-            # Fill email (target visible email/username input)
+            # ── Check if we got redirected to the Sign Up ("Join") page ───────
+            if "signup" in page.url:
+                self._log("Detected Sign Up form. Attempting to click 'Sign in'...")
+                try:
+                    # Attempt to click any element with text "Sign in"
+                    page.locator("text=Sign in").last.click(timeout=3000)
+                    page.wait_for_timeout(3000)
+                except Exception as e:
+                    pass
+                
+            # SANITY CHECK: Are we still stuck on the Join form?
+            if "signup" in page.url:
+                self._log("ERROR: Stuck on the sign-up form. Cannot proceed with login.")
+                return False
+                
+            # ── Fill email ────────────────────────────────────────────────────
             email_sel = (
-                "input#username:visible, "
-                "input[name='session_key']:visible, "
-                "input[autocomplete='username']:visible, "
-                "input[type='email']:visible"
+                "input#username, "
+                "input[name='session_key'], "
+                "input[type='email'], "
+                "input#email-or-phone"
             )
-            page.wait_for_selector(email_sel, timeout=8000)
-            page.locator(email_sel).first.fill(p.linkedin_email)
-            page.wait_for_timeout(500)
+            email_filled = False
+            for inp in page.locator(email_sel).all():
+                if inp.is_visible():
+                    inp.focus()
+                    inp.press_sequentially(p.linkedin_email, delay=50)
+                    email_filled = True
+                    break
+            if not email_filled:
+                self._log("ERROR: Could not find visible email field.")
+                return False
 
-            # Fill password (target visible password input)
-            pass_sel = (
-                "input#password:visible, "
-                "input[name='session_password']:visible, "
-                "input[autocomplete='current-password']:visible, "
-                "input[type='password']:visible"
+            # ── Fill password ─────────────────────────────────────────────────
+            password_sel = (
+                "input#password, "
+                "input[name='session_password'], "
+                "input[type='password']"
             )
-            page.locator(pass_sel).first.fill(p.linkedin_password)
-            page.wait_for_timeout(500)
+            pwd_filled = False
+            for inp in page.locator(password_sel).all():
+                if inp.is_visible():
+                    inp.focus()
+                    inp.press_sequentially(p.linkedin_password, delay=100)
+                    pwd_filled = True
+                    break
+            if not pwd_filled:
+                self._log("ERROR: Could not find visible password field.")
+                return False
 
-            # Submit
-            self._log("Submitting login form...")
-            submit_sel = (
-                "button[type='submit']:visible, "
-                "button[data-litms-control-urn='login-submit']:visible, "
-                "form button.btn__primary--large:visible"
-            )
-            page.locator(submit_sel).first.click()
-            page.wait_for_timeout(4000)
+            # ── Submit ─────────────────────────────────────────────────────────
+            try:
+                # Just press Enter while focused on the password field
+                page.keyboard.press("Enter")
+                submit_clicked = True
+                self._log("Login submitted via Enter key — waiting for redirect...")
+            except Exception as e:
+                self._log(f"Error submitting form: {e}")
+                return False
+            page.wait_for_timeout(5000)
 
-            # Handle post-login states
-            current_url = page.url
-
-            # CAPTCHA / verification challenge
-            if "checkpoint" in current_url or "challenge" in current_url:
-                self._log(
-                    "  ⚠️  LinkedIn verification challenge detected!\n"
-                    "  Please complete the verification in the browser window.\n"
-                    "  Waiting up to 120 seconds..."
-                )
-                print("\n>>> LINKEDIN CHALLENGE: Please complete the verification in the browser! <<<\n")
-                for _ in range(60):
+            # ── Handle post-login challenges ───────────────────────────────────
+            # Wait for feed or challenge URL
+            for _ in range(45): # wait up to 90s
+                url = page.url
+                path = urlparse(url).path
+                
+                # Check for successful login by verifying we landed on /feed or /jobs
+                if "/feed" in path or "/jobs" in path or "/in/" in path:
+                    self._log("Successfully logged in.")
+                    self._linkedin_ok = True
+                    return True
+                    
+                # Check if we were redirected to a challenge
+                if "challenge" in path or "checkpoint" in path:
+                    self._log("Challenge/2FA detected. Waiting 90s for manual input or auto-resolve...")
                     page.wait_for_timeout(2000)
-                    if "/feed" in page.url or "/jobs" in page.url:
-                        break
-                    if "/login" in page.url:
-                        self._log("Still on login page — credentials may be wrong.")
+                    continue
+
+                # Wrong password / locked
+                if "/login" in path:
+                    err_visible = page.locator(
+                        ".alert--error, [data-test-id='error-message'], "
+                        ".login__error, form .error"
+                    ).first.is_visible(timeout=2000)
+                    if err_visible:
+                        self._log("Login failed — incorrect credentials or account locked.")
                         return False
 
-            # 2FA email/app code
-            if "verification" in page.url or "two-step" in page.url:
-                self._log(
-                    "  ⚠️  LinkedIn 2FA detected!\n"
-                    "  Please enter the verification code in the browser.\n"
-                    "  Waiting up to 120 seconds..."
-                )
-                print("\n>>> LINKEDIN 2FA: Enter your verification code in the browser! <<<\n")
-                for _ in range(60):
-                    page.wait_for_timeout(2000)
-                    if "/feed" in page.url or "/jobs" in page.url:
-                        break
+                # CAPTCHA / browser verification
+                if "checkpoint" in path or "challenge" in path:
+                    self._log("⚠️  LinkedIn security challenge detected! Waiting up to 90s...")
+                    print("\n>>> LINKEDIN CHALLENGE: Complete the verification in the browser window! <<<\n")
+                    for _ in range(45):  # 45 × 2s = 90s
+                        page.wait_for_timeout(2000)
+                        if any(x in page.url for x in ["/feed", "/jobs"]):
+                            self._log("Challenge passed ✓")
+                            return True
+                        if "/login" in page.url:
+                            break
+                    continue
 
-            # Verify success
-            final_url = page.url
-            if "/feed" in final_url or "/jobs" in final_url or "linkedin.com/in/" in final_url:
-                self._log("LinkedIn login successful!")
-                return True
-            else:
-                # Try one more navigation to feed
+                # 2FA — email or app code
+                if any(x in path for x in ["verification", "two-step", "otp"]):
+                    self._log("⚠️  LinkedIn 2FA detected! Waiting up to 90s for verification code...")
+                    print("\n>>> LINKEDIN 2FA: Enter your verification code in the browser! <<<\n")
+                    for _ in range(45):  # 45 × 2s = 90s
+                        page.wait_for_timeout(2000)
+                        if any(x in page.url for x in ["/feed", "/jobs"]):
+                            self._log("2FA passed ✓")
+                            return True
+                    continue
+
+                # Still not on feed — try navigating there
                 page.goto(self.LINKEDIN_FEED, wait_until="domcontentloaded", timeout=15000)
-                page.wait_for_timeout(2000)
-                if "/login" not in page.url and "/signup" not in page.url:
-                    self._log("LinkedIn login verified via feed navigation.")
-                    return True
-                self._log(f"LinkedIn login failed. Final URL: {page.url}")
-                return False
+                page.wait_for_timeout(3000)
+
+            # Final URL check
+            if any(x in page.url for x in ["/feed", "/jobs"]):
+                self._log("LinkedIn login verified via feed navigation ✓")
+                return True
+
+            self._log(f"LinkedIn login failed. Final URL: {page.url}")
+            return False
 
         except Exception as e:
             self._log(f"LinkedIn login error: {e}")
             return False
         finally:
-            page.close()
+            try:
+                page.close()
+            except Exception:
+                pass
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
     def _new_page(self) -> Page:
         """Open a new page with stealth applied."""
         page = self.context.new_page()
+        
+        # Aggressively override webdriver properties to bypass LinkedIn's silent bot trap
+        page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+            window.chrome = {
+                runtime: {}
+            };
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3],
+            });
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en'],
+            });
+        """)
+        
         try:
             from playwright_stealth import Stealth
             Stealth().apply_stealth_sync(page)

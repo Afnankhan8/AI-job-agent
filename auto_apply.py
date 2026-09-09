@@ -38,7 +38,7 @@ from database.repository import JobRepository
 from applier.session_manager import SessionManager
 from applier.adapters import detect_platform, get_adapter
 from applier.url_resolver import resolve_url
-from ai.ollama_client import OllamaClient
+from ai import get_ai_client
 from ai.resume_tailor import tailor_application
 
 
@@ -110,11 +110,16 @@ def run_auto_apply(
     print("\n====================================")
     print("     AI-POWERED AUTO-APPLY ENGINE v2")
     print("====================================")
+    provider_label = (
+        f"Claude ({SETTINGS.claude_model})"
+        if SETTINGS.ai_provider == "claude"
+        else f"Ollama ({SETTINGS.ollama_model})"
+    )
     print(f"  Mode      : {'DRY RUN (no Submit)' if dry_run else 'LIVE — will submit forms'}")
     print(f"  Browser   : {'Visible (headful)' if not headless else 'Headless (invisible)'}")
     print(f"  Limit     : {limit} jobs")
     print(f"  Min score : {min_score}% (jobs below this threshold are skipped)")
-    print(f"  AI engine : {'DISABLED' if skip_ai else f'Ollama {SETTINGS.ollama_model}'}")
+    print(f"  AI engine : {'DISABLED' if skip_ai else provider_label}")
     print("====================================\n")
 
     # ── Load profile ──────────────────────────────────────────────────────────
@@ -129,20 +134,32 @@ def run_auto_apply(
     # ── AI client ─────────────────────────────────────────────────────────────
     ai_client = None
     if not skip_ai:
-        ai_client = OllamaClient(
-            base_url=SETTINGS.ollama_base_url,
-            model=SETTINGS.ollama_model,
-        )
-        if ai_client.health_check():
-            print(f"  AI Engine : Ollama connected ({SETTINGS.ollama_model})\n")
-        else:
-            print(f"  AI Engine : Ollama not available — falling back to static profile.\n")
+        try:
+            ai_client = get_ai_client()
+            if ai_client.health_check():
+                client_name = type(ai_client).__name__.replace("Client", "")
+                model = (
+                    SETTINGS.claude_model
+                    if SETTINGS.ai_provider == "claude"
+                    else SETTINGS.ollama_model
+                )
+                print(f"  AI Engine : {client_name} connected ({model})\n")
+            else:
+                print(f"  AI Engine : AI not available — falling back to static profile.\n")
+                ai_client = None
+        except Exception as e:
+            print(f"  AI Engine : Could not initialise — {e}. Falling back to static profile.\n")
             ai_client = None
 
     # ── Database ──────────────────────────────────────────────────────────────
     init_db(SETTINGS.database_path)
     conn = get_connection(SETTINGS.database_path)
     repo = JobRepository(conn)
+    
+    # Prune old jobs that we no longer care about
+    pruned_count = repo.prune_expired_jobs(days=30)
+    if pruned_count > 0:
+        print(f"  [Database] Pruned {pruned_count} expired jobs from the active queue.")
 
     # Get unapplied jobs — prefer those with AI scores above threshold
     all_unapplied = repo.get_unapplied_jobs(limit=limit * 3)  # over-fetch, then filter
@@ -157,9 +174,10 @@ def run_auto_apply(
             # Unscored job — include it (will try to score inline if AI available)
             jobs_to_process.append(j)
 
-    # Sort: scored jobs first (highest score), then unscored
+    # Sort: Newest seen first (last_seen_at DESC), then scored jobs
     jobs_to_process.sort(
-        key=lambda j: (j.ai_match_score is None, -(j.ai_match_score or 0))
+        key=lambda j: (j.last_seen_at, j.ai_match_score is None, -(j.ai_match_score or 0)),
+        reverse=True
     )
     jobs_to_process = jobs_to_process[:limit]
 
@@ -176,17 +194,18 @@ def run_auto_apply(
 
     # ── Browser context ───────────────────────────────────────────────────────
     with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(
-            user_data_dir=str(Path("browser_profile").resolve()),
+        browser = p.chromium.launch(
             headless=headless,
-            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+            args=["--disable-blink-features=AutomationControlled"]
+        )
+        
+        ctx = browser.new_context(
+            viewport={"width": 1280, "height": 900},
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/122.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1280, "height": 900},
-            locale="en-US",
+                "Chrome/128.0.0.0 Safari/537.36"
+            )
         )
 
         # ── Step 1: Ensure all platform sessions (login upfront) ───────────────
@@ -270,6 +289,11 @@ def run_auto_apply(
 
             # ── Apply ──────────────────────────────────────────────────────────
             try:
+                # Pass session_manager to LinkedIn adapter so it can auto re-login
+                extra_kwargs = {}
+                if platform == "linkedin":
+                    extra_kwargs["_session_manager"] = session_mgr
+
                 outcome = adapter.apply(
                     job=job,
                     profile=profile,
@@ -279,6 +303,7 @@ def run_auto_apply(
                     ai_answers=ai_answers,
                     screenshots_dir=SETTINGS.screenshots_dir,
                     ai_client=ai_client,
+                    **extra_kwargs,
                 )
             except Exception as e:
                 print(f"         ADAPTER ERROR: {e}")
