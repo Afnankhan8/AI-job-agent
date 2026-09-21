@@ -12,7 +12,7 @@
 </head>
 <body>
 
-  <!-- Animated mesh background -->
+  <!-- Cinematic ambient background -->
   <div class="bg-mesh"></div>
 
   <!-- Sidebar -->
@@ -40,6 +40,11 @@
       <li><a href="{{ url_for('applications_page') }}"
              class="nav-link {% if request.endpoint == 'applications_page' %}active{% endif %}">
         <span class="nav-icon">📋</span> Applications
+      </a></li>
+      <li><a href="{{ url_for('status_page') }}"
+             class="nav-link {% if request.endpoint == 'status_page' %}active{% endif %}">
+        <span class="nav-icon">📊</span> Application Status
+        <span class="live-dot" style="margin-left:auto;background:var(--green);width:6px;height:6px;" title="Real-time Status Tracker"></span>
       </a></li>
       <li><a href="{{ url_for('profile_page') }}"
              class="nav-link {% if request.endpoint == 'profile_page' %}active{% endif %}">

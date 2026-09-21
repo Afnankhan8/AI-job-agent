@@ -28,23 +28,27 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 # Fix Windows console encoding
-if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if sys.platform == 'win32':
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')  # type: ignore
 
 from config.settings import SETTINGS
 from config.profile_loader import CandidateProfile
 from database.models import init_db, get_connection
 from database.repository import JobRepository
 from applier.session_manager import SessionManager
+from applier.browser_utils import launch_safe_context
 from applier.adapters import detect_platform, get_adapter
 from applier.url_resolver import resolve_url
 from ai import get_ai_client
 from ai.resume_tailor import tailor_application
+from jobs.scope import check_job_scope
+from email_tracker import sync_linkedin_emails
 
 
 # ── Session-only entry point ───────────────────────────────────────────────────
 
-def run_login_only(headful: bool = True, profile_path: str = None) -> None:
+def run_login_only(headful: bool = True, profile_path: str | None = None) -> None:
     """
     Open the browser, log into all platforms, then exit.
     Run this once to establish persistent sessions — subsequent runs
@@ -66,17 +70,10 @@ def run_login_only(headful: bool = True, profile_path: str = None) -> None:
     print("====================================\n")
 
     with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(
-            user_data_dir=str(Path("browser_profile").resolve()),
+        ctx, _ = launch_safe_context(
+            p,
+            user_data_dir=Path("browser_profile"),
             headless=not headful,
-            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/122.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1280, "height": 900},
-            locale="en-US",
         )
 
         manager = SessionManager(ctx, profile, verbose=True)
@@ -88,55 +85,52 @@ def run_login_only(headful: bool = True, profile_path: str = None) -> None:
 
         ctx.close()
 
-    print("\n  Sessions saved. Future runs will skip the login page.\n")
+    if results.get("linkedin"):
+        print("\n  LinkedIn session saved. Future runs will skip the login page.\n")
+    else:
+        print("\n  LinkedIn login was not completed. No session was saved.\n")
+        sys.exit(1)
 
 
 # ── Main apply runner ──────────────────────────────────────────────────────────
 
 def run_auto_apply(
-    limit: int = None,
+    limit: int | None = None,
     dry_run: bool = False,
     headful: bool = False,
-    profile_path: str = None,
+    profile_path: str | None = None,
     skip_ai: bool = False,
-    min_score: int = None,
-) -> None:
-
-    limit        = limit or SETTINGS.auto_apply_limit
-    headless     = not headful
+    min_score: int | None = None,
+    fresh_only: bool = True,
+):
+    """
+    Auto-apply to unapplied jobs using platform adapters.
+    """
+    apply_limit = limit or 30
+    min_score = min_score if min_score is not None else SETTINGS.ai_match_threshold
+    headless = not headful
     profile_path = profile_path or SETTINGS.user_profile_path
-    min_score    = min_score if min_score is not None else SETTINGS.ai_match_threshold
 
-    print("\n====================================")
-    print("     AI-POWERED AUTO-APPLY ENGINE v2")
-    print("====================================")
-    provider_label = (
-        f"Claude ({SETTINGS.claude_model})"
-        if SETTINGS.ai_provider == "claude"
-        else f"Ollama ({SETTINGS.ollama_model})"
-    )
-    print(f"  Mode      : {'DRY RUN (no Submit)' if dry_run else 'LIVE — will submit forms'}")
-    print(f"  Browser   : {'Visible (headful)' if not headless else 'Headless (invisible)'}")
-    print(f"  Limit     : {limit} jobs")
-    print(f"  Min score : {min_score}% (jobs below this threshold are skipped)")
-    print(f"  AI engine : {'DISABLED' if skip_ai else provider_label}")
-    print("====================================\n")
-
-    # ── Load profile ──────────────────────────────────────────────────────────
     try:
         profile = CandidateProfile.load_from_file(profile_path)
-        print(f"  Applicant : {profile.personal.full_name} | {profile.personal.email}")
-        print(f"  Skills    : {', '.join(profile.skills[:5])}{'...' if len(profile.skills) > 5 else ''}\n")
     except Exception as e:
         print(f"  ERROR loading profile: {e}")
         sys.exit(1)
 
-    # ── AI client ─────────────────────────────────────────────────────────────
+    print("\n====================================")
+    print("     AI AUTO-APPLY ENGINE v2")
+    print("====================================")
+    print(f"  Profile   : {profile.personal.full_name}")
+    print(f"  Mode      : {'DRY RUN (fill only)' if dry_run else 'LIVE APPLY (will submit)'}")
+    print(f"  Browser   : {'Visible' if headful else 'Headless'}")
+    print(f"  Min Score : {min_score}%")
+    print(f"  Fresh Only: {fresh_only}")
+
     ai_client = None
     if not skip_ai:
         try:
             ai_client = get_ai_client()
-            if ai_client.health_check():
+            if ai_client and ai_client.is_available():
                 client_name = type(ai_client).__name__.replace("Client", "")
                 model = (
                     SETTINGS.claude_model
@@ -161,12 +155,28 @@ def run_auto_apply(
     if pruned_count > 0:
         print(f"  [Database] Pruned {pruned_count} expired jobs from the active queue.")
 
+    cleanup = repo.clear_jobs(clear_applied=True, clear_old=True, unanswered_days=90)
+    if cleanup["deleted_jobs"] or cleanup["deleted_apps"]:
+        print(
+            f"  [Database] Removed {cleanup['deleted_jobs']} jobs and "
+            f"{cleanup['deleted_apps']} unanswered applications older than 90 days."
+        )
+
     # Get unapplied jobs — prefer those with AI scores above threshold
-    all_unapplied = repo.get_unapplied_jobs(limit=limit * 3)  # over-fetch, then filter
+    all_unapplied = [
+        job for job in repo.get_unapplied_jobs(
+            limit=apply_limit * 3, fresh_only=fresh_only
+        )
+        if job.source_name != "jooble"
+    ]
 
     # Filter by score if AI has scored them; include unscored jobs too
     jobs_to_process = []
     for j in all_unapplied:
+        scope = check_job_scope(j, profile, SETTINGS.default_where)
+        if not scope.allowed:
+            print(f"         Scope skip: {j.title} — {scope.reason}")
+            continue
         if j.ai_match_score is not None:
             if j.ai_match_score >= min_score:
                 jobs_to_process.append(j)
@@ -176,10 +186,17 @@ def run_auto_apply(
 
     # Sort: Newest seen first (last_seen_at DESC), then scored jobs
     jobs_to_process.sort(
-        key=lambda j: (j.last_seen_at, j.ai_match_score is None, -(j.ai_match_score or 0)),
+        # Process direct LinkedIn listings before aggregator pages that may
+        # be stopped by an external CAPTCHA/Cloudflare challenge.
+        key=lambda j: (
+            0 if j.source_name == "linkedin" else 1,
+            j.last_seen_at,
+            j.ai_match_score is None,
+            -(j.ai_match_score or 0),
+        ),
         reverse=True
     )
-    jobs_to_process = jobs_to_process[:limit]
+    jobs_to_process = jobs_to_process[:apply_limit]
 
     if not jobs_to_process:
         print("  No unapplied jobs to process.\n")
@@ -194,18 +211,10 @@ def run_auto_apply(
 
     # ── Browser context ───────────────────────────────────────────────────────
     with sync_playwright() as p:
-        browser = p.chromium.launch(
+        ctx, _ = launch_safe_context(
+            p,
+            user_data_dir=Path("browser_profile"),
             headless=headless,
-            args=["--disable-blink-features=AutomationControlled"]
-        )
-        
-        ctx = browser.new_context(
-            viewport={"width": 1280, "height": 900},
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/128.0.0.0 Safari/537.36"
-            )
         )
 
         # ── Step 1: Ensure all platform sessions (login upfront) ───────────────
@@ -279,7 +288,7 @@ def run_auto_apply(
                 ai_cover_letter = profile.cover_letter_template
 
             # ── Detect platform ────────────────────────────────────────────────
-            resolved_url, _ = resolve_url(job.url)
+            resolved_url, _ = resolve_url((job.url or ""))
             platform = detect_platform(resolved_url)
             adapter  = get_adapter(platform)
             print(f"         Platform: {platform.upper()} | URL: {resolved_url[:70]}...")
@@ -365,6 +374,72 @@ def run_auto_apply(
         for o in manual_jobs:
             print(f"    -> {o.redirect_url}")
         print()
+
+    # ── Email confirmation sync ───────────────────────────────────────────────
+    applied_count = counts.get("APPLIED", 0)
+    if applied_count > 0:
+        print("  [3/4] Syncing LinkedIn confirmation emails...\n")
+        try:
+            synced, msg = sync_linkedin_emails()
+            print(f"         {msg}\n")
+        except Exception as e:
+            synced = 0
+            print(f"         Email sync failed: {e}")
+            print("         (Set IMAP_HOST / IMAP_USERNAME / IMAP_PASSWORD in .env to enable)\n")
+
+        # ── Show per-job email confirmation status ────────────────────────────
+        print("====================================")
+        print("     EMAIL CONFIRMATION STATUS")
+        print("====================================")
+
+        try:
+            init_db(SETTINGS.database_path)
+            email_conn = get_connection(SETTINGS.database_path)
+            email_rows = email_conn.execute(
+                """
+                SELECT j.title, j.company, a.status, a.applied_at,
+                       a.response_status, a.response_subject, a.response_received_at
+                FROM applications a
+                JOIN jobs j ON j.id = a.job_id
+                WHERE a.status = 'APPLIED'
+                ORDER BY a.applied_at DESC
+                LIMIT 30
+                """
+            ).fetchall()
+
+            confirmed = 0
+            awaiting  = 0
+            for row in email_rows:
+                title   = (row["title"][:45] + "...") if len(row["title"]) > 45 else row["title"]
+                company = row["company"] or "Unknown"
+                resp    = row["response_status"] or "AWAITING_REPLY"
+
+                if resp == "APPLICATION_CONFIRMED":
+                    subj = (row["response_subject"] or "")[:60]
+                    print(f'  ✅ {title} @ {company}')
+                    print(f'     Email: "{subj}"')
+                    confirmed += 1
+                elif resp in ("INTERVIEW_OR_NEXT_STEP",):
+                    print(f'  🎉 {title} @ {company} — INTERVIEW / NEXT STEP!')
+                    confirmed += 1
+                elif resp == "REJECTED":
+                    print(f'  ❌ {title} @ {company} — Rejected')
+                else:
+                    print(f'  ⏳ {title} @ {company} — Awaiting confirmation email...')
+                    awaiting += 1
+
+            print()
+            print(f"  Confirmed via email : {confirmed}")
+            print(f"  Awaiting reply      : {awaiting}")
+            print("====================================\n")
+
+            if awaiting > 0 and synced == 0:
+                print("  💡 Tip: If you applied just now, confirmation emails may take a few minutes.")
+                print("     Re-run 'python email_tracker.py' later to check for new confirmations.\n")
+
+            email_conn.close()
+        except Exception as e:
+            print(f"  Could not read confirmation status: {e}\n")
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────

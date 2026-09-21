@@ -45,7 +45,7 @@ class GreenhouseAdapter(BaseAdapter):
         os.makedirs(screenshots_dir, exist_ok=True)
 
         # Resolve redirect (grnh.se links redirect to boards.greenhouse.io)
-        final_url, chain = resolve_url(job.url)
+        final_url, chain = resolve_url(job.url or "")
         logs.append(f"Resolved URL: {final_url} (hops: {len(chain)})")
 
         outcome = AdapterOutcome(

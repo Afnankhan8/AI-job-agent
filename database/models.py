@@ -60,6 +60,11 @@ CREATE TABLE IF NOT EXISTS applications (
     logs            TEXT    NOT NULL DEFAULT '[]',
     ai_match_score  INTEGER,
     ai_cover_letter TEXT,
+    response_status TEXT NOT NULL DEFAULT 'AWAITING_REPLY',
+    response_received_at TEXT,
+    response_subject TEXT,
+    response_sender TEXT,
+    response_snippet TEXT,
     FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
 );
 
@@ -74,6 +79,11 @@ MIGRATIONS = [
     "ALTER TABLE jobs ADD COLUMN ai_cover_letter TEXT",
     "ALTER TABLE applications ADD COLUMN ai_match_score INTEGER",
     "ALTER TABLE applications ADD COLUMN ai_cover_letter TEXT",
+    "ALTER TABLE applications ADD COLUMN response_status TEXT NOT NULL DEFAULT 'AWAITING_REPLY'",
+    "ALTER TABLE applications ADD COLUMN response_received_at TEXT",
+    "ALTER TABLE applications ADD COLUMN response_subject TEXT",
+    "ALTER TABLE applications ADD COLUMN response_sender TEXT",
+    "ALTER TABLE applications ADD COLUMN response_snippet TEXT",
 ]
 
 

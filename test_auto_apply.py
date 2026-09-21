@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from database.models import init_db, get_connection
 from database.repository import JobRepository
@@ -106,6 +107,99 @@ class TestRepository(unittest.TestCase):
         # After applying, job should no longer appear as unapplied
         unapplied = self.repo.get_unapplied_jobs(limit=10)
         self.assertEqual(len(unapplied), 0)
+
+    def test_failed_application_can_be_retried(self):
+        jobs = self.repo.get_unapplied_jobs(limit=10)
+        job_id = jobs[0].id
+
+        app_id = self.repo.create_application(job_id, status="PENDING")
+        self.repo.update_application(app_id, status="REQUIRES_MANUAL")
+
+        retryable = self.repo.get_unapplied_jobs(limit=10)
+        self.assertEqual(len(retryable), 1)
+        self.assertEqual(retryable[0].id, job_id)
+
+    def test_detected_already_applied_can_be_rechecked(self):
+        jobs = self.repo.get_unapplied_jobs(limit=10)
+        job_id = jobs[0].id
+
+        app_id = self.repo.create_application(job_id, status="APPLIED")
+        self.repo.update_application(
+            app_id,
+            status="APPLIED",
+            error_reason="Already applied (detected on page).",
+        )
+
+        retryable = self.repo.get_unapplied_jobs(limit=10)
+        self.assertEqual(len(retryable), 1)
+        self.assertEqual(retryable[0].id, job_id)
+
+    def test_clear_jobs_deletes_only_unanswered_applications_older_than_90_days(self):
+        old_job_id = self.repo.get_unapplied_jobs(limit=10)[0].id
+        old_app_id = self.repo.create_application(old_job_id)
+        self.repo.update_application(old_app_id, status="APPLIED")
+        old_applied_at = (datetime.now(timezone.utc) - timedelta(days=91)).isoformat()
+        self.conn.execute(
+            "UPDATE applications SET applied_at = ? WHERE id = ?",
+            (old_applied_at, old_app_id),
+        )
+
+        self.conn.execute(
+            """
+            INSERT INTO jobs (
+                dedup_key, source_name, source_job_id, title, title_normalized,
+                first_seen_at, last_seen_at, status, found_on_sources, url
+            ) VALUES (?,?,?,?,?,?,?,?,?,?)
+            """,
+            ("key2", "jooble", "j2", "ML Engineer", "ml engineer",
+             old_applied_at, old_applied_at, "ACTIVE", '["jooble"]',
+             "https://jooble.org/jdp/456"),
+        )
+        recent_job_id = self.conn.execute(
+            "SELECT id FROM jobs WHERE dedup_key = 'key2'"
+        ).fetchone()[0]
+        recent_app_id = self.repo.create_application(recent_job_id)
+        self.repo.update_application(recent_app_id, status="APPLIED")
+        self.conn.commit()
+
+        result = self.repo.clear_jobs(clear_applied=True, clear_old=False)
+
+        self.assertEqual(result["deleted_jobs"], 1)
+        self.assertIsNone(
+            self.conn.execute(
+                "SELECT id FROM jobs WHERE id = ?", (old_job_id,)
+            ).fetchone()
+        )
+        self.assertIsNotNone(
+            self.conn.execute(
+                "SELECT id FROM jobs WHERE id = ?", (recent_job_id,)
+            ).fetchone()
+        )
+
+    def test_clear_jobs_preserves_replied_applications(self):
+        job_id = self.repo.get_unapplied_jobs(limit=10)[0].id
+        app_id = self.repo.create_application(job_id)
+        self.repo.update_application(app_id, status="APPLIED")
+        old_applied_at = (datetime.now(timezone.utc) - timedelta(days=91)).isoformat()
+        self.conn.execute(
+            """
+            UPDATE applications
+            SET applied_at = ?, response_status = 'RESPONSE_RECEIVED',
+                response_received_at = ?
+            WHERE id = ?
+            """,
+            (old_applied_at, old_applied_at, app_id),
+        )
+        self.conn.commit()
+
+        result = self.repo.clear_jobs(clear_applied=True, clear_old=False)
+
+        self.assertEqual(result["deleted_jobs"], 0)
+        self.assertIsNotNone(
+            self.conn.execute(
+                "SELECT id FROM applications WHERE id = ?", (app_id,)
+            ).fetchone()
+        )
 
 
 class TestUrlResolver(unittest.TestCase):

@@ -20,6 +20,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from job_sources.base import JobSourceConnector, RawJob, JobSourceError
+from applier.browser_utils import launch_safe_context
 
 
 class LinkedInConnector(JobSourceConnector):
@@ -81,21 +82,10 @@ class LinkedInConnector(JobSourceConnector):
         url = f"{self.BASE_URL}?{urllib.parse.urlencode(params)}"
 
         with sync_playwright() as p:
-            ctx = p.chromium.launch_persistent_context(
+            ctx, _ = launch_safe_context(
+                p,
                 user_data_dir=profile_path,
                 headless=True,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                ],
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/122.0.0.0 Safari/537.36"
-                ),
-                viewport={"width": 1280, "height": 900},
-                locale="en-US",
             )
             pg = ctx.new_page()
             try:

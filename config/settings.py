@@ -18,6 +18,7 @@ class Settings:
     adzuna_app_id: Optional[str]
     adzuna_app_key: Optional[str]
     jooble_api_key: Optional[str]
+    enable_jooble: bool
     database_path: str
     default_country: str        # Adzuna country code (gb, us, au, etc.)
     default_what: str           # Search keywords
@@ -34,6 +35,11 @@ class Settings:
     ai_provider: str            # 'claude' or 'ollama'
     claude_api_key: Optional[str]
     claude_model: str
+    imap_host: Optional[str]
+    imap_port: int
+    imap_username: Optional[str]
+    imap_password: Optional[str]
+    imap_use_ssl: bool
 
 
 def load_settings() -> Settings:
@@ -51,6 +57,7 @@ def load_settings() -> Settings:
         adzuna_app_id=adzuna_id,
         adzuna_app_key=adzuna_key,
         jooble_api_key=jooble_key,
+        enable_jooble=os.getenv("ENABLE_JOOBLE", "false").lower() in ("true", "1", "yes"),
         database_path=os.getenv("DATABASE_PATH", "jobs.db"),
         default_country=os.getenv("DEFAULT_COUNTRY", "gb"),
         default_what=os.getenv("DEFAULT_WHAT", "AI Engineer"),
@@ -67,6 +74,11 @@ def load_settings() -> Settings:
         ai_provider=os.getenv("AI_PROVIDER", "ollama").lower(),
         claude_api_key=os.getenv("CLAUDE_API_KEY"),
         claude_model=os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5"),
+        imap_host=os.getenv("IMAP_HOST"),
+        imap_port=int(os.getenv("IMAP_PORT", "993")),
+        imap_username=os.getenv("IMAP_USERNAME"),
+        imap_password=os.getenv("IMAP_PASSWORD"),
+        imap_use_ssl=os.getenv("IMAP_USE_SSL", "true").lower() in ("true", "1", "yes"),
     )
 
 

@@ -115,29 +115,144 @@ class JobRepository:
         )
         self.conn.commit()
 
-    def list_active_jobs(self, limit: int = 100) -> List[JobRecord]:
-        rows = self.conn.execute(
-            "SELECT * FROM jobs WHERE status = 'ACTIVE' ORDER BY last_seen_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+    def list_active_jobs(self, limit: int = 100, unapplied_only: bool = False,
+                         exclude_detected_applied: bool = True) -> List[JobRecord]:
+        """
+        List active jobs.
+        - unapplied_only: exclude jobs that have ANY application record
+        - exclude_detected_applied: also exclude jobs flagged 'Already applied (detected on page)'
+        """
+        if unapplied_only:
+            rows = self.conn.execute(
+                """
+                SELECT j.* FROM jobs j
+                LEFT JOIN applications a ON a.job_id = j.id
+                WHERE j.status = 'ACTIVE' AND a.id IS NULL
+                ORDER BY
+                    CASE j.freshness_label
+                        WHEN 'TODAY'  THEN 1
+                        WHEN 'NEW'    THEN 2
+                        WHEN 'RECENT' THEN 3
+                        ELSE 4
+                    END,
+                    j.last_seen_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        elif exclude_detected_applied:
+            # Exclude jobs where application says 'Already applied (detected on page)'
+            rows = self.conn.execute(
+                """
+                SELECT j.* FROM jobs j
+                WHERE j.status = 'ACTIVE'
+                AND j.id NOT IN (
+                    SELECT DISTINCT job_id FROM applications
+                    WHERE error_reason LIKE '%Already applied%'
+                )
+                ORDER BY
+                    CASE j.freshness_label
+                        WHEN 'TODAY'  THEN 1
+                        WHEN 'NEW'    THEN 2
+                        WHEN 'RECENT' THEN 3
+                        ELSE 4
+                    END,
+                    j.last_seen_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM jobs WHERE status = 'ACTIVE' ORDER BY last_seen_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
         return [self._row_to_job(r) for r in rows]
 
-    def get_unapplied_jobs(self, limit: int = 100) -> List[JobRecord]:
-        """Active jobs that have never had a successful application attempt."""
+    def get_unapplied_jobs(self, limit: int = 100, fresh_only: bool = False) -> List[JobRecord]:
+        """
+        Active jobs without a successful or in-progress application.
+
+        Failed and manual-required attempts remain eligible for retry. If
+        fresh_only=True, only TODAY/NEW jobs (posted < 24h) are returned.
+        Always prioritises freshest first.
+        """
+        freshness_filter = "AND j.freshness_label IN ('TODAY', 'NEW')" if fresh_only else ""
         rows = self.conn.execute(
-            """
+            f"""
             SELECT j.*
             FROM   jobs j
-            LEFT   JOIN applications a
-                   ON  a.job_id = j.id
             WHERE  j.status = 'ACTIVE'
-            AND    a.id IS NULL
-            ORDER  BY j.last_seen_at DESC
+            AND NOT EXISTS (
+                SELECT 1 FROM applications a
+                WHERE a.job_id = j.id
+                AND (
+                    a.status IN ('PENDING', 'SKIPPED')
+                    OR (
+                        a.status = 'APPLIED'
+                        AND (a.error_reason IS NULL OR a.error_reason NOT LIKE 'Already applied%')
+                    )
+                )
+            )
+            {freshness_filter}
+            ORDER BY
+                CASE j.freshness_label
+                    WHEN 'TODAY'  THEN 1
+                    WHEN 'NEW'    THEN 2
+                    WHEN 'RECENT' THEN 3
+                    ELSE 4
+                END,
+                j.last_seen_at DESC
             LIMIT  ?
             """,
             (limit,),
         ).fetchall()
         return [self._row_to_job(r) for r in rows]
+
+    def get_already_applied_detected(self, limit: int = 200) -> list:
+        """Return applications flagged as 'Already applied (detected on page)' for the separate tracker UI."""
+        rows = self.conn.execute(
+            """
+            SELECT a.*, j.title, j.company, j.url AS job_url, j.location, j.ai_match_score,
+                   j.freshness_label, j.last_seen_at AS job_last_seen
+            FROM applications a
+            JOIN jobs j ON j.id = a.job_id
+            WHERE a.error_reason LIKE '%Already applied%'
+            ORDER BY a.id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_fresh_stats(self) -> dict:
+        """Stats specifically for fresh (TODAY/NEW) unapplied jobs."""
+        row = self.conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total_fresh,
+                SUM(CASE WHEN j.freshness_label = 'TODAY' THEN 1 ELSE 0 END) AS today_count,
+                SUM(CASE WHEN j.freshness_label = 'NEW' THEN 1 ELSE 0 END) AS new_count,
+                SUM(CASE WHEN j.ai_match_score >= 80 THEN 1 ELSE 0 END) AS strong_fresh
+            FROM jobs j
+            LEFT JOIN applications a ON a.job_id = j.id
+            WHERE j.status = 'ACTIVE'
+            AND j.freshness_label IN ('TODAY', 'NEW')
+            AND a.id IS NULL
+            """
+        ).fetchone()
+        return dict(row) if row else {}
+
+    def get_application_summary_clean(self) -> dict:
+        """Application summary excluding 'Already applied (detected)' records."""
+        rows = self.conn.execute(
+            """
+            SELECT status, COUNT(*) AS n FROM applications
+            WHERE (error_reason NOT LIKE '%Already applied%' OR error_reason IS NULL)
+            GROUP BY status
+            """
+        ).fetchall()
+        return {r["status"]: r["n"] for r in rows}
 
     def prune_expired_jobs(self, days: int = 30) -> int:
         """Mark jobs that haven't been seen in `days` as EXPIRED."""
@@ -152,6 +267,61 @@ class JobRepository:
         )
         self.conn.commit()
         return cursor.rowcount
+
+    def clear_jobs(
+        self,
+        clear_applied: bool = True,
+        clear_old: bool = True,
+        unanswered_days: int = 90,
+    ) -> dict:
+        """Delete untracked old jobs and unanswered real applications after 90 days."""
+        conditions = []
+        params = []
+        if clear_old:
+            conditions.append(
+                "(a.id IS NULL AND (j.freshness_label = 'OLD' OR j.status = 'EXPIRED'))"
+            )
+        if clear_applied:
+            conditions.append(
+                "(a.status = 'APPLIED' "
+                "AND a.applied_at IS NOT NULL "
+                "AND a.response_received_at IS NULL "
+                "AND a.applied_at < datetime('now', '-' || ? || ' days'))"
+            )
+            params.append(unanswered_days)
+            conditions.append("a.error_reason LIKE '%Already applied%'")
+
+        if not conditions:
+            return {"deleted_jobs": 0, "deleted_apps": 0}
+
+        cond_str = " OR ".join(conditions)
+        select_to_delete = f"""
+            SELECT DISTINCT j.id FROM jobs j
+            LEFT JOIN applications a ON a.job_id = j.id
+            WHERE {cond_str}
+        """
+        rows = self.conn.execute(select_to_delete, params).fetchall()
+        job_ids = [r[0] for r in rows]
+
+        if not job_ids:
+            return {"deleted_jobs": 0, "deleted_apps": 0}
+
+        deleted_jobs = 0
+        deleted_apps = 0
+        
+        chunk_size = 900
+        for i in range(0, len(job_ids), chunk_size):
+            chunk = job_ids[i:i+chunk_size]
+            ids_str = ",".join("?" for _ in chunk)
+            
+            apps_cur = self.conn.execute(f"DELETE FROM applications WHERE job_id IN ({ids_str})", chunk)
+            jobs_cur = self.conn.execute(f"DELETE FROM jobs WHERE id IN ({ids_str})", chunk)
+            
+            deleted_apps += apps_cur.rowcount
+            deleted_jobs += jobs_cur.rowcount
+            
+        self.conn.commit()
+        return {"deleted_jobs": deleted_jobs, "deleted_apps": deleted_apps}
 
     # ── AI Analysis ───────────────────────────────────────────────────────────
 
@@ -264,7 +434,7 @@ class JobRepository:
         ai_match_score: Optional[int] = None,
         ai_cover_letter: Optional[str] = None,
     ) -> None:
-        applied_at = datetime.now(timezone.utc).isoformat() if status in ("APPLIED", "DRY_RUN") else None
+        applied_at = datetime.now(timezone.utc).isoformat() if status == "APPLIED" else None
         self.conn.execute(
             """
             UPDATE applications
@@ -288,6 +458,26 @@ class JobRepository:
             "SELECT status, COUNT(*) AS n FROM applications GROUP BY status"
         ).fetchall()
         return {r["status"]: r["n"] for r in rows}
+
+    def record_application_response(
+        self,
+        app_id: int,
+        response_status: str,
+        received_at: str,
+        subject: str,
+        sender: str,
+        snippet: str,
+    ) -> None:
+        self.conn.execute(
+            """
+            UPDATE applications
+            SET response_status = ?, response_received_at = ?,
+                response_subject = ?, response_sender = ?, response_snippet = ?
+            WHERE id = ?
+            """,
+            (response_status, received_at, subject, sender, snippet, app_id),
+        )
+        self.conn.commit()
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

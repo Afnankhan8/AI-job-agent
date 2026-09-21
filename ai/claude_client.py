@@ -64,6 +64,19 @@ class ClaudeClient:
         """
         return bool(self.api_key and self._client is not None)
 
+    def is_available(self) -> bool:
+        """Alias for health_check() — used by auto_apply.py."""
+        return self.health_check()
+
+    def complete(self, prompt: str, max_tokens: int = 4096, **kwargs) -> str:
+        """Alias for generate() — used by linkedin_adapter.py."""
+        old_max = self.max_tokens
+        self.max_tokens = max_tokens
+        try:
+            return self.generate(prompt, **kwargs)
+        finally:
+            self.max_tokens = old_max
+
     # ── Text generation ───────────────────────────────────────────────────────
 
     def generate(

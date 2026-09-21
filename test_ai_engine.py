@@ -15,8 +15,9 @@ import sys
 import os
 
 # Fix Windows console encoding for unicode characters
-if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if sys.platform == 'win32':
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')  # type: ignore
 
 sys.path.insert(0, ".")
 

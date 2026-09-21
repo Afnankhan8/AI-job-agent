@@ -4,21 +4,57 @@
 {% block content %}
 <div class="page-header">
   <div>
-    <h1 class="page-title">All Jobs</h1>
+    <h1 class="page-title">Not Applied Jobs</h1>
     <p class="page-sub">
       <span style="color:var(--purple);font-weight:600">{{ total }}</span>
       listing{{ 's' if total != 1 else '' }} found
+      {% if fresh_only %}<span style="margin-left:0.5rem;font-size:11px;background:rgba(248,113,113,0.12);color:var(--red);border:1px solid rgba(248,113,113,0.25);border-radius:20px;padding:1px 8px;font-weight:700;">🔥 24h FRESH ONLY</span>{% endif %}
     </p>
   </div>
-  <div class="header-right">
+  <div class="header-right" style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;">
+    <!-- 24h Fresh Priority toggle -->
+    {% if fresh_only %}
+    <a href="{{ url_for('jobs_page') }}?sort={{ sort }}{% if q %}&q={{ q }}{% endif %}" class="btn-action" style="background:rgba(248,113,113,0.18);color:var(--red);border:1px solid rgba(248,113,113,0.35);font-size:12px;padding:0.45rem 0.9rem;">
+      🔥 24h Only — ON (click to reset)
+    </a>
+    {% else %}
+    <a href="{{ url_for('jobs_page') }}?fresh_only=1&sort={{ sort }}{% if q %}&q={{ q }}{% endif %}" class="btn-action" style="background:rgba(255,255,255,0.04);color:var(--text-2);border:1px solid var(--border);font-size:12px;padding:0.45rem 0.9rem;">
+      🔥 Show 24h Fresh Only
+    </a>
+    {% endif %}
+    <a href="{{ url_for('jobs_page') }}?freshness=TODAY&sort=fresh{% if q %}&q={{ q }}{% endif %}" class="btn-action" style="background:rgba(248,113,113,0.12);color:var(--red);border:1px solid rgba(248,113,113,0.2);font-size:12px;padding:0.45rem 0.9rem;">
+      🔥 Today
+    </a>
+    <a href="{{ url_for('jobs_page') }}?freshness=NEW&sort=fresh{% if q %}&q={{ q }}{% endif %}" class="btn-action" style="background:rgba(255,255,255,0.04);color:var(--text-2);border:1px solid var(--border);font-size:12px;padding:0.45rem 0.9rem;">
+      ⚡ New
+    </a>
+    <a href="{{ url_for('jobs_page') }}?freshness=RECENT&sort=fresh{% if q %}&q={{ q }}{% endif %}" class="btn-action" style="background:rgba(255,255,255,0.04);color:var(--text-2);border:1px solid var(--border);font-size:12px;padding:0.45rem 0.9rem;">
+      ✨ Recent
+    </a>
+    <button class="btn-action" style="background:rgba(248,113,113,0.12);color:var(--red);border:1px solid rgba(248,113,113,0.2);font-size:12px;padding:0.45rem 0.9rem;" onclick="clearOldJobs()">
+      🗑️ Clear Old Jobs
+    </button>
     <div class="header-time" id="live-time"></div>
   </div>
 </div>
 
+<script>
+async function clearOldJobs() {
+  if (!confirm("Delete all OLD and EXPIRED jobs from the database? This cannot be undone.")) return;
+  try {
+    const res = await fetch("/api/clear", { method: "POST" });
+    const d = await res.json();
+    if (d.status === "success") { alert(d.message); window.location.reload(); }
+    else { alert("Error: " + d.message); }
+  } catch(e) { alert("Request failed: " + e); }
+}
+</script>
+
 <!-- Filters -->
 <form class="filters glass" method="GET" action="{{ url_for('jobs_page') }}">
+  {% if fresh_only %}<input type="hidden" name="fresh_only" value="1">{% endif %}
   <input class="filter-input" type="text" name="q"
-    placeholder="🔍  Search title or company…" value="{{ q }}">
+    placeholder="🔍  Search title, company, or location…" value="{{ q }}">
 
   <select class="filter-select" name="freshness">
     <option value="">⏱ All freshness</option>
@@ -45,7 +81,7 @@
   </select>
 
   <select class="filter-select" name="sort">
-    <option value="recent"  {% if sort == 'recent'  %}selected{% endif %}>📅 Most Recent</option>
+    <option value="fresh"   {% if sort == 'fresh'   %}selected{% endif %}>🔥 Freshest First</option>
     <option value="score"   {% if sort == 'score'   %}selected{% endif %}>🎯 Highest Score</option>
     <option value="company" {% if sort == 'company' %}selected{% endif %}>🏢 Company A–Z</option>
   </select>

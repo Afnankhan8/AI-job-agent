@@ -42,18 +42,21 @@ def _scrape_linkedin(url: str) -> str:
         soup = BeautifulSoup(resp.text, "html.parser")
 
         # Primary selector: show-more-less-html content
-        desc_div = soup.find("div", class_=re.compile(r"show-more-less-html__markup"))
+        desc_div = soup.find(  # type: ignore
+            "div", class_=re.compile(r"show-more-less-html__markup"))
         if desc_div:
             return desc_div.get_text(separator="\n", strip=True)
 
         # Fallback: description container
-        desc_div = soup.find("div", class_=re.compile(r"description__text"))
+        desc_div = soup.find(  # type: ignore
+            "div", class_=re.compile(r"description__text"))
         if desc_div:
             return desc_div.get_text(separator="\n", strip=True)
 
         # Broader fallback — any job description section
         for cls in ["job-description", "jobs-description", "jobs-box__html-content"]:
-            div = soup.find("div", class_=re.compile(cls))
+            div = soup.find(  # type: ignore
+            "div", class_=re.compile(cls))
             if div:
                 return div.get_text(separator="\n", strip=True)
 
@@ -75,7 +78,8 @@ def _scrape_jooble(url: str) -> str:
             ("div", {"class": re.compile(r"description")}),
             ("div", {"itemprop": "description"}),
         ]:
-            el = soup.find(*selector)
+            el = soup.find(  # type: ignore
+            *selector)
             if el:
                 return el.get_text(separator="\n", strip=True)
 
@@ -105,7 +109,8 @@ def _fetch_one(job: JobRecord) -> Tuple[int, str]:
                 ("section", {"class": re.compile(r"description", re.I)}),
                 ("article", {}),
             ]:
-                el = soup.find(tag, attr)
+                el = soup.find(  # type: ignore
+            tag, attr)
                 if el:
                     desc = el.get_text(separator="\n", strip=True)
                     break

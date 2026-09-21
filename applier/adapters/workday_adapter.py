@@ -46,7 +46,7 @@ class WorkdayAdapter(BaseAdapter):
         screenshot_path = os.path.join(screenshots_dir, f"job_{job.id}_{timestamp}.png")
         os.makedirs(screenshots_dir, exist_ok=True)
 
-        final_url, _ = resolve_url(job.url)
+        final_url, _ = resolve_url(job.url or "")
         logs.append(f"Resolved URL: {final_url}")
 
         outcome = AdapterOutcome(
@@ -165,7 +165,7 @@ class WorkdayAdapter(BaseAdapter):
             for target in [page, *page.frames]:
                 try:
                     # Text inputs
-                    for inp in target.query_selector_all("input[type='text'], input[type='email'], input[type='tel'], textarea"):
+                    for inp in getattr(target, 'query_selector_all', lambda x: [])("input[type='text'], input[type='email'], input[type='tel'], textarea"):
                         try:
                             if not inp.is_visible():
                                 continue
@@ -196,7 +196,7 @@ class WorkdayAdapter(BaseAdapter):
                             pass
 
                     # File inputs
-                    for fi in target.query_selector_all("input[type='file']"):
+                    for fi in getattr(target, 'query_selector_all', lambda x: [])("input[type='file']"):
                         try:
                             if fi.is_visible() and os.path.isfile(resume_path):
                                 fi.set_input_files(resume_path)

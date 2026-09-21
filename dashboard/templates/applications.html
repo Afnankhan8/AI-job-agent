@@ -5,42 +5,73 @@
 <div class="page-header">
   <div>
     <h1 class="page-title">Application Log &amp; Diagnostics</h1>
-    <p class="page-sub">Inspect step-by-step Playwright execution logs &amp; captured screenshots</p>
+    <p class="page-sub">Real attempts only · <span style="color:var(--cyan)">{{ apps|length }}</span> records tracked</p>
   </div>
-  <div class="header-right">
+  <div class="header-right" style="display:flex;gap:0.75rem;flex-wrap:wrap;">
+    <button class="btn-action" style="background:var(--red);color:white;border:none;padding:0.55rem 1rem;font-size:12px;" id="btn-clear-apps" onclick="clearJobs()">
+      <span>🗑️</span> Clear History
+    </button>
     <button class="btn-action btn-login" id="btn-login" onclick="triggerLogin()">
       <span>🔑</span> Session Login
     </button>
   </div>
 </div>
 
-<!-- Summary badges -->
+<script>
+async function clearJobs() {
+  if (!confirm("Delete all OLD and APPLIED jobs from the database? This cannot be undone.")) return;
+  const btn = document.getElementById("btn-clear-apps");
+  const orig = btn.innerHTML;
+  btn.innerHTML = "Clearing…"; btn.disabled = true;
+  try {
+    const res = await fetch("/api/clear", { method: "POST" });
+    const d = await res.json();
+    if (d.status === "success") { alert(d.message); window.location.reload(); }
+    else { alert("Error: " + d.message); btn.innerHTML = orig; btn.disabled = false; }
+  } catch(e) { alert("Failed: " + e); btn.innerHTML = orig; btn.disabled = false; }
+}
+</script>
+
+<!-- ── Summary badges ──────────────────────────────────────────────────────── -->
 <div class="app-summary">
   {% for status, count in summary.items() %}
   <div class="app-badge">
-    <span class="badge-count" style="color:{% if status=='APPLIED' %}var(--green){% elif status=='DRY_RUN' %}var(--cyan){% elif status=='REQUIRES_MANUAL' %}var(--orange){% else %}var(--red){% endif %}">{{ count }}</span>
+    <span class="badge-count" style="color:{% if status=='APPLIED' %}var(--green){% elif status=='DRY_RUN' %}var(--cyan){% elif status=='REQUIRES_MANUAL' %}var(--orange){% elif status=='FAILED' %}var(--red){% else %}var(--purple){% endif %}">{{ count }}</span>
     <span class="badge-label">{{ status }}</span>
   </div>
   {% endfor %}
+  {% if already_det_count %}
+  <div class="app-badge" style="border-color:rgba(157,113,255,0.2);">
+    <span class="badge-count" style="color:var(--purple)">{{ already_det_count }}</span>
+    <span class="badge-label">Prev. Applied</span>
+  </div>
+  {% endif %}
 </div>
 
-<!-- Helpful Diagnostic Callout -->
-<div class="glass" style="padding:1rem 1.25rem;margin-bottom:1.5rem;border-color:rgba(34,211,238,0.25);display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+<!-- ── REQUIRES_MANUAL tip ─────────────────────────────────────────────────── -->
+<div class="glass" style="padding:1rem 1.25rem;margin-bottom:1.5rem;border-color:rgba(34,211,238,0.2);display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap">
   <div style="display:flex;align-items:center;gap:0.75rem">
-    <span style="font-size:24px">💡</span>
+    <span style="font-size:22px">💡</span>
     <div>
-      <div style="font-size:13px;font-weight:600;color:var(--text)">Why do some applications stop at REQUIRES_MANUAL?</div>
-      <div style="font-size:12px;color:var(--text-2)">LinkedIn &amp; Workday require an active logged-in session. Click <strong>Session Login</strong> above to open Chrome and log in once.</div>
+      <div style="font-size:13px;font-weight:700;color:var(--text)">Why do some applications stop at REQUIRES_MANUAL?</div>
+      <div style="font-size:12px;color:var(--text-2);margin-top:2px">LinkedIn &amp; Workday require an active logged-in session. Click <strong>Session Login</strong> to open Chrome and log in once.</div>
     </div>
   </div>
-  <button class="btn-action btn-login" style="padding:0.4rem 0.85rem;font-size:12px" onclick="triggerLogin()">
+  <button class="btn-action btn-login" style="padding:0.45rem 0.9rem;font-size:12px;flex-shrink:0" onclick="triggerLogin()">
     🔑 Perform One-Time Login
   </button>
 </div>
 
-<!-- Table -->
+<!-- ══════════════════════════════════════════════════════════════════════════
+     SECTION 1 — Real Application Attempts
+══════════════════════════════════════════════════════════════════════════ -->
+<div class="section-head" style="margin-bottom:0.75rem">
+  <h2 class="section-title"><span class="icon">📋</span> Application Attempts</h2>
+  <span style="font-size:11.5px;color:var(--text-3)">Actual bot-driven apply runs — excludes pre-detected duplicates</span>
+</div>
+
 {% if apps %}
-<div class="apps-table-wrap glass">
+<div class="apps-table-wrap glass" style="margin-bottom:2.5rem">
   <table class="apps-table">
     <thead>
       <tr>
@@ -58,7 +89,7 @@
       <tr>
         <td style="font-family:var(--font-mono);font-size:11px;color:var(--text-3)">#{{ a.id }}</td>
         <td class="td-title">
-          <a href="{{ url_for('job_detail', job_id=a.job_id) }}" style="font-weight:600">{{ a.title }}</a>
+          <a href="{{ url_for('job_detail', job_id=a.job_id) }}" style="font-weight:700">{{ a.title }}</a>
         </td>
         <td style="color:var(--text-2)">{{ a.company or '—' }}</td>
         <td>
@@ -69,11 +100,11 @@
           <span class="inline-score">{{ a.ai_match_score }}%</span>
           {% else %}<span style="color:var(--text-3)">—</span>{% endif %}
         </td>
-        <td class="td-notes" style="font-size:12px;color:{% if a.status=='REQUIRES_MANUAL' %}var(--orange){% elif a.status=='FAILED' %}var(--red){% else %}var(--text-2){% endif %}">
+        <td class="td-notes" style="font-size:12px;color:{% if a.status=='REQUIRES_MANUAL' %}var(--orange){% elif a.status=='FAILED' %}var(--red){% elif a.status=='APPLIED' %}var(--green){% else %}var(--text-2){% endif %}">
           {{ a.error_reason[:90] if a.error_reason else 'Fully executed' }}
         </td>
         <td>
-          <button class="btn-clear" style="font-size:11px;padding:3px 8px" onclick="inspectApp({{ a.id }})">
+          <button class="btn-clear" style="font-size:11px;padding:3px 9px" onclick="inspectApp({{ a.id }})">
             🔍 Inspect Logs
           </button>
         </td>
@@ -83,10 +114,115 @@
   </table>
 </div>
 {% else %}
-<div class="empty-state glass">
+<div class="empty-state glass" style="margin-bottom:2rem">
   <div class="empty-icon">📋</div>
   <h3>No application records yet</h3>
   <p>Run <code>python main.py --auto-apply</code> or click "Auto-Apply" on any job detail page.</p>
 </div>
 {% endif %}
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     SECTION 2 — Previously Applied (Detected) — Separate Tracker
+══════════════════════════════════════════════════════════════════════════ -->
+{% if already_applied %}
+<div style="margin-bottom:2.5rem">
+  <!-- Section header with toggle -->
+  <div class="section-head" style="margin-bottom:0.75rem">
+    <h2 class="section-title">
+      <span class="icon">🔒</span> Previously Applied — Detected
+      <span style="
+        margin-left:0.5rem;
+        font-size:11px;font-weight:700;
+        padding:2px 9px;border-radius:20px;
+        background:rgba(157,113,255,0.12);
+        color:var(--purple);border:1px solid rgba(157,113,255,0.22);
+      ">{{ already_applied|length }}</span>
+    </h2>
+    <button onclick="toggleDetected()" id="btn-toggle-det"
+      style="font-size:11px;background:rgba(157,113,255,0.08);color:var(--purple);
+             border:1px solid rgba(157,113,255,0.2);border-radius:8px;
+             padding:4px 12px;cursor:pointer;transition:all 0.2s;">
+      Hide ▲
+    </button>
+  </div>
+
+  <!-- Info bar -->
+  <div style="
+    padding:0.75rem 1rem;
+    background:rgba(157,113,255,0.06);
+    border:1px solid rgba(157,113,255,0.15);
+    border-radius:10px;
+    margin-bottom:0.75rem;
+    font-size:12.5px;
+    color:var(--text-2);
+    display:flex;align-items:center;gap:0.6rem;
+  ">
+    <span style="font-size:18px">🔍</span>
+    <span>The bot visited these jobs and detected <strong style="color:var(--purple)">you had already applied previously</strong>. They are <strong>excluded</strong> from all queues and stats. This is your de-duplication history.</span>
+  </div>
+
+  <div id="detected-section">
+    <div class="apps-table-wrap glass">
+      <table class="apps-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Job Title</th>
+            <th>Company</th>
+            <th>Location</th>
+            <th>AI Score</th>
+            <th>Freshness</th>
+            <th>Note</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for a in already_applied %}
+          <tr>
+            <td style="font-family:var(--font-mono);font-size:10px;color:var(--text-3)">#{{ a.id }}</td>
+            <td class="td-title">
+              <a href="{{ a.job_url or '#' }}" target="_blank" style="font-weight:600">{{ a.title }}</a>
+            </td>
+            <td style="color:var(--text-2)">{{ a.company or '—' }}</td>
+            <td style="color:var(--text-3);font-size:12px">{{ a.location or '—' }}</td>
+            <td>
+              {% if a.ai_match_score %}
+              <span class="inline-score">{{ a.ai_match_score }}%</span>
+              {% else %}<span style="color:var(--text-3)">—</span>{% endif %}
+            </td>
+            <td>
+              <span class="fresh-pill fresh-{{ (a.freshness_label or 'old')|lower }}">
+                {{ a.freshness_label or 'OLD' }}
+              </span>
+            </td>
+            <td>
+              <span style="
+                font-size:10.5px;
+                color:var(--purple);
+                background:rgba(157,113,255,0.10);
+                border:1px solid rgba(157,113,255,0.18);
+                border-radius:6px;
+                padding:2px 7px;
+                font-weight:600;
+              ">Previously Applied</span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+let detVisible = true;
+function toggleDetected() {
+  const sec = document.getElementById('detected-section');
+  const btn = document.getElementById('btn-toggle-det');
+  detVisible = !detVisible;
+  sec.style.display = detVisible ? '' : 'none';
+  btn.textContent = detVisible ? 'Hide ▲' : 'Show ▼';
+}
+</script>
+{% endif %}
+
 {% endblock %}

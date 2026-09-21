@@ -41,7 +41,7 @@ from jobs.deduplicator import check_duplicate
 # ── Connector setup ────────────────────────────────────────────────────────────
 
 def build_connectors() -> list[JobSourceConnector]:
-    connectors = []
+    connectors: list[JobSourceConnector] = []
 
     if SETTINGS.adzuna_app_id and SETTINGS.adzuna_app_key:
         connectors.append(
@@ -50,10 +50,10 @@ def build_connectors() -> list[JobSourceConnector]:
     else:
         print("  [adzuna] skipped — no credentials in .env")
 
-    if SETTINGS.jooble_api_key:
+    if SETTINGS.jooble_api_key and SETTINGS.enable_jooble:
         connectors.append(JoobleConnector(SETTINGS.jooble_api_key))
     else:
-        print("  [jooble] skipped — no credentials in .env")
+        print("  [jooble] skipped — disabled (set ENABLE_JOOBLE=true to enable)")
 
     connectors.append(LinkedInConnector())
 
@@ -134,15 +134,13 @@ def run_ingestion(what: str, where: str, pages: int) -> int:
                         first_seen_at=datetime.now(timezone.utc),
                     )
                     if decision.is_duplicate:
-                        repo.mark_seen_again(decision.existing_job_id, norm.source_name, freshness)
+                        repo.mark_seen_again(int(decision.existing_job_id) if decision.existing_job_id is not None else 0, norm.source_name, freshness)
                         per_source[src]["updated"] += 1
                         totals["updated"] += 1
                     else:
                         repo.insert_job(norm, freshness)
                         per_source[src]["inserted"] += 1
                         totals["inserted"] += 1
-
-    conn.close()
 
     # Summary
     print("====================================")
@@ -160,6 +158,7 @@ def run_ingestion(what: str, where: str, pages: int) -> int:
     if pruned > 0:
         print(f"  [Database] Cleaned up {pruned} jobs older than 1 month (moved to bucket list).\n")
 
+    conn.close()
     return totals["inserted"]
 
 
@@ -336,5 +335,5 @@ Examples:
             limit=args.limit,
             dry_run=args.dry_run,
             headful=args.headful,
-            min_score=getattr(args, 'min_score', None),
+            min_score=int(getattr(args, 'min_score', 0)) if getattr(args, 'min_score', None) is not None else None,
         )

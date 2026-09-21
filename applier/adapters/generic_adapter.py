@@ -37,7 +37,7 @@ class GenericAdapter(BaseAdapter):
         screenshot_path = os.path.join(screenshots_dir, f"job_{job.id}_{timestamp}.png")
 
         # Resolve URL
-        final_url, _ = resolve_url(job.url)
+        final_url, _ = resolve_url(job.url or "")
         logs.append(f"Resolved URL: {final_url}")
 
         outcome = AdapterOutcome(

@@ -82,8 +82,9 @@ def score_unanalyzed_jobs(
 
 if __name__ == "__main__":
     import sys
-    if sys.platform == "win32":
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if sys.platform == 'win32':
+        if hasattr(sys.stdout, 'reconfigure'):
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')  # type: ignore
 
     print("\n====================================")
     print("       AI JOB SCORER")

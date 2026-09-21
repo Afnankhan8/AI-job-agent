@@ -43,7 +43,7 @@ class LeverAdapter(BaseAdapter):
         screenshot_path = os.path.join(screenshots_dir, f"job_{job.id}_{timestamp}.png")
         os.makedirs(screenshots_dir, exist_ok=True)
 
-        final_url, _ = resolve_url(job.url)
+        final_url, _ = resolve_url(job.url or "")
         # For Lever, the application form is at the job URL + "/apply"
         apply_url = final_url.rstrip("/")
         if not apply_url.endswith("/apply"):

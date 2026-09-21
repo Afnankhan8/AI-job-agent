@@ -114,6 +114,10 @@
         {% if a.error_reason %}
         <div style="font-size:11px;color:var(--orange);margin-top:4px">{{ a.error_reason }}</div>
         {% endif %}
+          {% if a.redirect_url and (a.redirect_url.startswith('http://') or a.redirect_url.startswith('https://')) %}
+          <a href="{{ a.redirect_url }}" target="_blank" rel="noopener noreferrer"
+            style="display:inline-block;font-size:11px;color:var(--cyan);margin-top:4px">Open application page ↗</a>
+          {% endif %}
       </div>
       {% endfor %}
     </div>

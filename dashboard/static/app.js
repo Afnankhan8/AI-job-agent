@@ -1,6 +1,365 @@
-/* ── AI Job Agent Dashboard — Real-time JS Engine ────────────────────────── */
+/* ══════════════════════════════════════════════════════════════════════════════
+   AI JOB AGENT DASHBOARD — 3D INTERACTION ENGINE + LIVE DATA LAYER
+   All original functionality preserved. Added premium 3D interaction layer.
+══════════════════════════════════════════════════════════════════════════════ */
 
 'use strict';
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   SECTION 1 — PREMIUM 3D INTERACTION ENGINE
+══════════════════════════════════════════════════════════════════════════════ */
+
+// ── Spring physics engine ──────────────────────────────────────────────────────
+class SpringValue {
+  constructor(initial = 0, stiffness = 200, damping = 22, mass = 1) {
+    this.value    = initial;
+    this.target   = initial;
+    this.velocity = 0;
+    this.stiffness = stiffness;
+    this.damping   = damping;
+    this.mass      = mass;
+  }
+  step(dt) {
+    const force   = -this.stiffness * (this.value - this.target);
+    const damp    = -this.damping * this.velocity;
+    const accel   = (force + damp) / this.mass;
+    this.velocity += accel * dt;
+    this.value    += this.velocity * dt;
+  }
+  setTarget(t) { this.target = t; }
+  isAtRest(threshold = 0.001) {
+    return Math.abs(this.value - this.target) < threshold && Math.abs(this.velocity) < threshold;
+  }
+}
+
+// ── Global cursor state ───────────────────────────────────────────────────────
+const cursor = {
+  x: window.innerWidth  / 2,
+  y: window.innerHeight / 2,
+  rawX: window.innerWidth  / 2,
+  rawY: window.innerHeight / 2,
+  springX: new SpringValue(window.innerWidth / 2, 80, 14),
+  springY: new SpringValue(window.innerHeight / 2, 80, 14),
+};
+
+document.addEventListener('mousemove', (e) => {
+  cursor.rawX = e.clientX;
+  cursor.rawY = e.clientY;
+  cursor.springX.setTarget(e.clientX);
+  cursor.springY.setTarget(e.clientY);
+});
+
+// ── Cursor glow element ───────────────────────────────────────────────────────
+let glowEl = null;
+function initCursorGlow() {
+  glowEl = document.createElement('div');
+  glowEl.id = 'cursor-glow';
+  document.body.appendChild(glowEl);
+}
+
+// ── 3D tilt for cards ─────────────────────────────────────────────────────────
+const tiltCards = new Map();
+
+function registerTiltCard(el, options = {}) {
+  const {
+    maxTilt   = 10,
+    scale     = 1.03,
+    glare     = true,
+    spring    = { stiffness: 180, damping: 20 },
+    depth     = 8,
+  } = options;
+
+  const rotX = new SpringValue(0, spring.stiffness, spring.damping);
+  const rotY = new SpringValue(0, spring.stiffness, spring.damping);
+  const scaleV = new SpringValue(1, spring.stiffness * 0.8, spring.damping * 1.2);
+
+  // Build glare element
+  let glareEl = null;
+  if (glare) {
+    glareEl = document.createElement('div');
+    glareEl.style.cssText = `
+      position:absolute; inset:0; border-radius:inherit;
+      pointer-events:none; z-index:2; overflow:hidden;
+    `;
+    const glareInner = document.createElement('div');
+    glareInner.style.cssText = `
+      position:absolute; width:200%; height:200%;
+      background:linear-gradient(135deg,rgba(255,255,255,0.12) 0%,transparent 50%);
+      transition:none; will-change:transform;
+    `;
+    glareEl.appendChild(glareInner);
+    el.style.position = 'relative';
+    el.style.overflow = 'hidden';
+    el.appendChild(glareEl);
+  }
+
+  const state = { hovering: false, glareInner };
+  tiltCards.set(el, { rotX, rotY, scaleV, state, maxTilt, scale, depth, glareEl });
+
+  el.addEventListener('mouseenter', () => {
+    state.hovering = true;
+    scaleV.setTarget(scale);
+  });
+  el.addEventListener('mouseleave', () => {
+    state.hovering = false;
+    rotX.setTarget(0);
+    rotY.setTarget(0);
+    scaleV.setTarget(1);
+    if (glareEl) {
+      const gi = glareEl.querySelector('div');
+      if (gi) gi.style.transform = 'translate(-50%, -50%)';
+    }
+  });
+  el.addEventListener('mousemove', (e) => {
+    if (!state.hovering) return;
+    const rect   = el.getBoundingClientRect();
+    const cx     = rect.left + rect.width  / 2;
+    const cy     = rect.top  + rect.height / 2;
+    const dx     = (e.clientX - cx) / (rect.width  / 2);
+    const dy     = (e.clientY - cy) / (rect.height / 2);
+    rotY.setTarget(dx * maxTilt);
+    rotX.setTarget(-dy * maxTilt);
+
+    if (glareEl) {
+      const gi = glareEl.querySelector('div');
+      if (gi) {
+        const gx = (dx + 1) / 2 * 100;
+        const gy = (dy + 1) / 2 * 100;
+        gi.style.transform = `translate(${gx - 50}%, ${gy - 50}%)`;
+      }
+    }
+  });
+}
+
+// ── Parallax layers ───────────────────────────────────────────────────────────
+const parallaxLayers = [];
+function registerParallax(el, depth = 0.02) {
+  parallaxLayers.push({ el, depth });
+}
+
+// ── Main animation loop ───────────────────────────────────────────────────────
+let lastTime = 0;
+function mainAnimationLoop(ts) {
+  const dt = Math.min((ts - lastTime) / 1000, 0.05);
+  lastTime = ts;
+
+  // Step cursor springs
+  cursor.springX.step(dt);
+  cursor.springY.step(dt);
+  cursor.x = cursor.springX.value;
+  cursor.y = cursor.springY.value;
+
+  // Move cursor glow
+  if (glowEl) {
+    glowEl.style.left = cursor.x + 'px';
+    glowEl.style.top  = cursor.y + 'px';
+  }
+
+  // Update tilt cards
+  tiltCards.forEach(({ rotX, rotY, scaleV, state, maxTilt, scale, depth }, el) => {
+    rotX.step(dt);
+    rotY.step(dt);
+    scaleV.step(dt);
+    if (!rotX.isAtRest(0.005) || !rotY.isAtRest(0.005) || !scaleV.isAtRest(0.0005)) {
+      el.style.transform = `
+        perspective(var(--perspective))
+        rotateX(${rotX.value}deg)
+        rotateY(${rotY.value}deg)
+        scale(${scaleV.value})
+        translateZ(${state.hovering ? depth : 0}px)
+      `;
+    }
+  });
+
+  // Parallax
+  const cx = window.innerWidth  / 2;
+  const cy = window.innerHeight / 2;
+  parallaxLayers.forEach(({ el, depth }) => {
+    const dx = (cursor.x - cx) * depth;
+    const dy = (cursor.y - cy) * depth;
+    el.style.transform = `translate(${dx}px, ${dy}px)`;
+  });
+
+  requestAnimationFrame(mainAnimationLoop);
+}
+
+// ── Floating particles ────────────────────────────────────────────────────────
+function spawnParticles() {
+  const colors = [
+    'rgba(157,113,255,0.5)',
+    'rgba(34,211,238,0.4)',
+    'rgba(244,114,182,0.35)',
+    'rgba(52,211,153,0.35)',
+    'rgba(255,255,255,0.2)',
+  ];
+
+  function createParticle() {
+    const el = document.createElement('div');
+    el.className = 'particle';
+    const size = Math.random() * 3 + 1;
+    const color = colors[Math.floor(Math.random() * colors.length)];
+    const duration = Math.random() * 20 + 15;
+    const delay = Math.random() * 15;
+    const left = Math.random() * 100;
+    el.style.cssText = `
+      width:${size}px; height:${size}px;
+      background:${color};
+      left:${left}%;
+      animation-duration:${duration}s;
+      animation-delay:${delay}s;
+      box-shadow:0 0 ${size * 2}px ${color};
+    `;
+    document.body.appendChild(el);
+    // Remove after several cycles to prevent DOM bloat
+    setTimeout(() => el.remove(), (duration + delay + 5) * 1000 * 3);
+  }
+
+  // Initial batch
+  for (let i = 0; i < 18; i++) createParticle();
+  // Ongoing spawn
+  setInterval(() => {
+    if (document.querySelectorAll('.particle').length < 30) createParticle();
+  }, 3000);
+}
+
+// ── Section reveal animations (Intersection Observer) ─────────────────────────
+function initReveal() {
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.style.opacity    = '1';
+          entry.target.style.transform  = 'translateY(0) scale(1)';
+          observer.unobserve(entry.target);
+        }
+      });
+    },
+    { threshold: 0.08, rootMargin: '0px 0px -40px 0px' }
+  );
+
+  // Target cards and grid items
+  ['.stat-card', '.action-card', '.job-card', '.feed-card', '.side-panel', '.app-badge'].forEach(sel => {
+    document.querySelectorAll(sel).forEach((el, i) => {
+      el.style.cssText += `
+        opacity:0;
+        transform:translateY(24px) scale(0.97);
+        transition:opacity 0.5s cubic-bezier(0.34,1.2,0.64,1) ${i * 60}ms,
+                   transform 0.5s cubic-bezier(0.34,1.2,0.64,1) ${i * 60}ms;
+      `;
+      observer.observe(el);
+    });
+  });
+}
+
+// ── Button ripple effect ──────────────────────────────────────────────────────
+function addRipple(e) {
+  const btn  = e.currentTarget;
+  const rect = btn.getBoundingClientRect();
+  const x    = e.clientX - rect.left;
+  const y    = e.clientY - rect.top;
+
+  const ripple = document.createElement('span');
+  ripple.style.cssText = `
+    position:absolute; border-radius:50%; pointer-events:none;
+    background:rgba(255,255,255,0.18);
+    width:0; height:0;
+    left:${x}px; top:${y}px;
+    transform:translate(-50%,-50%);
+    animation:rippleAnim 0.55s cubic-bezier(0.4,0,0.2,1) forwards;
+  `;
+  btn.style.position = 'relative';
+  btn.style.overflow = 'hidden';
+  btn.appendChild(ripple);
+  ripple.addEventListener('animationend', () => ripple.remove());
+}
+
+// Inject ripple keyframe
+const rippleStyle = document.createElement('style');
+rippleStyle.textContent = `
+  @keyframes rippleAnim {
+    from { width:0; height:0; opacity:0.8; }
+    to   { width:300px; height:300px; opacity:0; }
+  }
+`;
+document.head.appendChild(rippleStyle);
+
+// ── Initialize all 3D effects ─────────────────────────────────────────────────
+function init3D() {
+  // Cursor glow
+  initCursorGlow();
+
+  // Particles
+  spawnParticles();
+
+  // Tilt — stat cards (gentler)
+  document.querySelectorAll('.stat-card').forEach(el =>
+    registerTiltCard(el, { maxTilt: 7, scale: 1.04, depth: 6 })
+  );
+
+  // Tilt — action cards (more prominent)
+  document.querySelectorAll('.action-card').forEach(el =>
+    registerTiltCard(el, { maxTilt: 12, scale: 1.05, depth: 10 })
+  );
+
+  // Tilt — feed cards (subtle)
+  document.querySelectorAll('.feed-card').forEach(el =>
+    registerTiltCard(el, { maxTilt: 4, scale: 1.02, depth: 4, glare: false })
+  );
+
+  // Tilt — side panels
+  document.querySelectorAll('.side-panel').forEach(el =>
+    registerTiltCard(el, { maxTilt: 5, scale: 1.015, depth: 4, glare: false })
+  );
+
+  // Tilt — job cards
+  document.querySelectorAll('.job-card').forEach(el =>
+    registerTiltCard(el, { maxTilt: 4, scale: 1.02, depth: 4, glare: false })
+  );
+
+  // Tilt — app badges
+  document.querySelectorAll('.app-badge').forEach(el =>
+    registerTiltCard(el, { maxTilt: 8, scale: 1.04, depth: 6 })
+  );
+
+  // Ripple — all buttons
+  document.querySelectorAll('button, .btn-filter, .btn-apply').forEach(el =>
+    el.addEventListener('mousedown', addRipple)
+  );
+
+  // Reveal animations
+  initReveal();
+
+  // Nav link hover depth
+  document.querySelectorAll('.nav-link').forEach(el => {
+    el.addEventListener('mouseenter', () => {
+      el.style.transition = 'all 0.25s cubic-bezier(0.34,1.2,0.64,1)';
+    });
+  });
+
+  // Sidebar brand logo parallax
+  const brandLogo = document.querySelector('.brand-logo');
+  if (brandLogo) registerParallax(brandLogo, 0.015);
+
+  // Start main loop
+  requestAnimationFrame(mainAnimationLoop);
+}
+
+// Re-register tilt after dynamic content loads
+function reinit3DForNewContent() {
+  document.querySelectorAll('.feed-card:not([data-tilt-init])').forEach(el => {
+    el.dataset.tiltInit = '1';
+    registerTiltCard(el, { maxTilt: 4, scale: 1.02, depth: 4, glare: false });
+    el.addEventListener('mousedown', addRipple);
+  });
+  document.querySelectorAll('.job-card:not([data-tilt-init])').forEach(el => {
+    el.dataset.tiltInit = '1';
+    registerTiltCard(el, { maxTilt: 4, scale: 1.02, depth: 4, glare: false });
+  });
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   SECTION 2 — ORIGINAL LIVE DATA ENGINE (UNCHANGED FUNCTIONALITY)
+══════════════════════════════════════════════════════════════════════════════ */
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
 
@@ -25,7 +384,7 @@ function animateCount(el, to, duration = 900) {
   const diff = to - from;
   function step(ts) {
     const progress = Math.min((ts - start) / duration, 1);
-    const ease = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+    const ease = 1 - Math.pow(1 - progress, 3);
     el.textContent = Math.round(from + diff * ease);
     if (progress < 1) requestAnimationFrame(step);
   }
@@ -47,7 +406,6 @@ function loadStats() {
       document.querySelectorAll('.stat-card.loading')
         .forEach(c => c.classList.remove('loading'));
 
-      // Update nav counts
       const navTotal = document.getElementById('nav-count-jobs');
       if (navTotal) navTotal.textContent = d.total || 0;
     })
@@ -65,7 +423,6 @@ function loadTrending() {
   fetch('/api/trending')
     .then(r => r.json())
     .then(d => {
-      // Companies
       if (compList && d.top_companies) {
         compList.innerHTML = d.top_companies.map(([name, count], i) => `
           <div class="trend-row">
@@ -76,7 +433,6 @@ function loadTrending() {
         `).join('');
       }
 
-      // Source bars
       if (srcBars && d.sources) {
         const total = Object.values(d.sources).reduce((a, b) => a + b, 0) || 1;
         const srcOrder = ['linkedin', 'jooble', 'adzuna'];
@@ -97,7 +453,6 @@ function loadTrending() {
         }).join('');
       }
 
-      // Score distribution
       if (distEl && d.score_dist) {
         const { strong, good, weak } = d.score_dist;
         distEl.innerHTML = `
@@ -147,17 +502,16 @@ function buildTicker(jobs) {
       ${scoreStr}
     </span>`;
   }).join('');
-  // Duplicate for seamless loop
   inner.innerHTML = items + items;
 }
 
 function buildFeedCard(job, rank) {
-  const fCls = freshnessClass(job.freshness);
+  const fCls    = freshnessClass(job.freshness);
   const rankCls = rank <= 3 ? `rank-${rank}` : '';
-  const rec = (job.recommendation || '').toLowerCase();
-  const recCls = rec || 'unscored';
+  const rec     = (job.recommendation || '').toLowerCase();
+  const recCls  = rec || 'unscored';
   const scoreStr = job.score !== null && job.score !== undefined ? `${job.score}` : '?';
-  const dashArr = job.score !== null && job.score !== undefined ? `${job.score}, 100` : `0, 100`;
+  const dashArr  = job.score !== null && job.score !== undefined ? `${job.score}, 100` : `0, 100`;
   const srcs = (job.sources || []).map(s =>
     `<span class="source-pill ${s}">${s}</span>`
   ).join('');
@@ -199,10 +553,8 @@ function loadFeed() {
     .then(d => {
       const jobs = d.jobs || [];
 
-      // Ticker (always update)
       buildTicker(jobs);
 
-      // Feed cards (only on home page)
       if (feedEl) {
         const isFirst = _lastCount === -1;
         if (!isFirst && d.count > _lastCount) {
@@ -220,17 +572,11 @@ function loadFeed() {
           return;
         }
 
-        const html = jobs.slice(0, 20).map((j, i) => {
-          const card = buildFeedCard(j, i + 1);
-          return isFirst ? card : card;
-        }).join('');
+        const html = jobs.slice(0, 20).map((j, i) => buildFeedCard(j, i + 1)).join('');
+        feedEl.innerHTML = html;
 
-        if (isFirst) {
-          feedEl.innerHTML = html;
-        } else {
-          // Smooth update — only if count changed
-          if (d.count !== _lastCount) feedEl.innerHTML = html;
-        }
+        // Re-register 3D for newly added cards
+        setTimeout(reinit3DForNewContent, 50);
       }
     })
     .catch(() => {});
@@ -245,7 +591,7 @@ function triggerLogin() {
 
   fetch('/run/login', { method: 'POST' })
     .then(r => r.json())
-    .then(d => {
+    .then(() => {
       showToast('Browser opened! Complete login in the pop-up window.', 'success', '🌐');
       setTimeout(() => {
         if (btn) { btn.classList.remove('loading'); btn.innerHTML = '<span>🔑</span> Session Login'; }
@@ -260,7 +606,7 @@ function inspectApp(appId) {
   fetch(`/api/applications/${appId}`)
     .then(r => r.json())
     .then(d => {
-      const modal = document.getElementById('inspect-modal');
+      const modal   = document.getElementById('inspect-modal');
       const content = document.getElementById('inspect-modal-content');
       if (!modal || !content) return;
 
@@ -272,35 +618,35 @@ function inspectApp(appId) {
         ? `<div style="margin-top:1rem">
              <div class="detail-label">Captured Playwright Screenshot</div>
              <a href="${d.screenshot_url}" target="_blank">
-               <img src="${d.screenshot_url}" style="width:100%;max-height:350px;object-fit:cover;border-radius:8px;border:1px solid var(--border)">
+               <img src="${d.screenshot_url}" style="width:100%;max-height:350px;object-fit:cover;border-radius:10px;border:1px solid var(--border)">
              </a>
            </div>`
         : `<div style="color:var(--text-3);margin-top:1rem">No screenshot recorded.</div>`;
 
       content.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem">
           <div>
-            <h2 style="font-family:var(--font-display);font-size:18px;font-weight:700">${d.title}</h2>
-            <p style="font-size:12px;color:var(--text-2)">${d.company} · Application #${d.id}</p>
+            <h2 style="font-family:var(--font-display);font-size:19px;font-weight:800;letter-spacing:-0.02em">${d.title}</h2>
+            <p style="font-size:12px;color:var(--text-2);margin-top:3px">${d.company} · Application #${d.id}</p>
           </div>
           <span class="status-badge status-${(d.status||'').toLowerCase()}">${d.status}</span>
         </div>
 
-        ${d.error_reason ? `<div style="padding:0.75rem;background:rgba(249,115,22,0.1);border:1px solid rgba(249,115,22,0.3);border-radius:8px;font-size:12px;color:var(--orange);margin-bottom:1rem">
-          <strong>Point of Stoppage:</strong> ${d.error_reason}
+        ${d.error_reason ? `<div style="padding:0.85rem;background:rgba(251,146,60,0.08);border:1px solid rgba(251,146,60,0.25);border-radius:10px;font-size:12px;color:var(--orange);margin-bottom:1.1rem;line-height:1.6">
+          <strong>⚠ Point of Stoppage:</strong> ${d.error_reason}
         </div>` : ''}
 
-        <div style="display:flex;gap:0.5rem;margin-bottom:1rem">
-          <a href="${d.job_url}" target="_blank" class="btn-filter" style="font-size:12px;padding:4px 10px;text-decoration:none">
+        <div style="display:flex;gap:0.5rem;margin-bottom:1.1rem">
+          <a href="${d.job_url}" target="_blank" class="btn-filter" style="font-size:12px;padding:5px 12px;text-decoration:none;border-radius:8px">
             Open Job Posting ↗
           </a>
-          <button class="btn-clear" style="font-size:12px;padding:4px 10px" onclick="triggerLogin()">
+          <button class="btn-clear" style="font-size:12px;padding:5px 12px;border-radius:8px" onclick="triggerLogin()">
             🔑 Run Session Login
           </button>
         </div>
 
         <div class="detail-label" style="margin-top:1rem">Execution Logs</div>
-        <div style="background:var(--bg);padding:0.85rem;border-radius:8px;max-height:200px;overflow-y:auto;font-family:var(--font-mono);font-size:11.5px;color:var(--text-2);border:1px solid var(--border)">
+        <div style="background:var(--bg);padding:0.9rem;border-radius:10px;max-height:200px;overflow-y:auto;font-family:var(--font-mono);font-size:11.5px;color:var(--text-2);border:1px solid var(--border);line-height:1.7">
           ${logsHtml}
         </div>
 
@@ -319,7 +665,6 @@ function closeInspectModal() {
   if (modal) modal.classList.add('modal-hidden');
 }
 
-
 function triggerFetch() {
   const btn = document.getElementById('btn-fetch');
   if (btn) { btn.classList.add('loading'); btn.textContent = '⏳ Fetching…'; }
@@ -337,7 +682,6 @@ function triggerFetch() {
 }
 
 function triggerScore() {
-
   const btn = document.getElementById('btn-score');
   if (btn) { btn.classList.add('loading'); btn.textContent = '🧠 Scoring…'; }
   fetch('/run/score', { method: 'POST' })
@@ -368,12 +712,15 @@ function applyJob(jobId, dryRun) {
     .then(r => r.json())
     .then(d => {
       if (btn) { btn.disabled = false; btn.textContent = '🚀 Auto-Apply'; }
-      const icons = { APPLIED: '✅', DRY_RUN: '🧪', REQUIRES_MANUAL: '👆', FAILED: '❌' };
-      const icon = icons[d.status] || '📋';
-      showToast(`${icon} ${d.status}${d.error ? ' — ' + d.error.slice(0, 80) : ''}`,
+      const icons = { APPLIED: '✅', DRY_RUN: '🧪', REQUIRES_MANUAL: '👆', FAILED: '❌', SKIPPED: '⏭️' };
+      const icon  = icons[d.status] || '📋';
+      const applicationUrl = /^https?:\/\//i.test(d.application_url || '')
+        ? ` — <a href="${d.application_url.replace(/"/g, '&quot;')}" target="_blank" rel="noopener noreferrer">Open application page</a>`
+        : '';
+      showToast(`${icon} ${d.status}${d.error ? ' — ' + d.error.slice(0, 80) : ''}${applicationUrl}`,
         d.status === 'APPLIED' ? 'success' : 'info', icon);
     })
-    .catch(e => {
+    .catch(() => {
       if (btn) { btn.disabled = false; btn.textContent = '🚀 Auto-Apply'; }
       showToast('Apply request failed — check the console', 'error', '❌');
     });
@@ -393,16 +740,39 @@ function startClock() {
   setInterval(tick, 1000);
 }
 
-// ── Init ──────────────────────────────────────────────────────────────────────
+/* ══════════════════════════════════════════════════════════════════════════════
+   SECTION 3 — INITIALIZATION
+══════════════════════════════════════════════════════════════════════════════ */
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Core data layer (original)
   startClock();
   loadStats();
   loadFeed();
   loadTrending();
 
-  // Refresh every 30 seconds
+  // Poll data
   setInterval(() => { loadStats(); loadFeed(); }, 30000);
-  // Trending every 60 seconds
   setInterval(() => { loadTrending(); }, 60000);
+
+  // 3D interaction layer (new, purely visual)
+  // Small delay so initial layout is painted before we measure elements
+  setTimeout(() => {
+    if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      init3D();
+    }
+  }, 100);
+
+  // Close modal on overlay click
+  const overlay = document.getElementById('inspect-modal');
+  if (overlay) {
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) closeInspectModal();
+    });
+  }
+
+  // Keyboard accessibility
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeInspectModal();
+  });
 });

@@ -77,8 +77,9 @@ class LinkedInAdapter(BaseAdapter):
     )
     _ALREADY_APPLIED = (
         "button[aria-label='You applied']:visible, "
-        ".artdeco-inline-feedback:has-text('Applied'), "
-        "span:has-text('Applied'):visible"
+        ".artdeco-inline-feedback:has-text('You applied'):visible, "
+        "[data-test-job-card-applied-status]:visible, "
+        "span:text-is('Applied'):visible"
     )
 
     def apply(
@@ -161,20 +162,21 @@ class LinkedInAdapter(BaseAdapter):
                 return outcome
 
             # ── 7. Find the Apply button ───────────────────────────────────────
-            easy_apply_visible = self._is_visible(page, self._EASY_APPLY_BTN, timeout=5000)
+            easy_apply_visible = self._apply_button_visible(page, easy=True, timeout=5000)
             external_visible   = (
-                self._is_visible(page, self._EXTERNAL_APPLY_BTN, timeout=3000)
+                self._apply_button_visible(page, easy=False, timeout=3000)
                 if not easy_apply_visible else False
             )
 
             # ── 8. Easy Apply flow ─────────────────────────────────────────────
             if easy_apply_visible:
                 logs.append("Easy Apply button found — starting Easy Apply flow.")
-                result = self._do_easy_apply(
+                result, confirmation_url = self._do_easy_apply(
                     page, profile, context, dry_run,
                     ai_cover_letter, ai_answers, ai_client, logs, screenshot_path,
                 )
                 outcome.status = result
+                outcome.redirect_url = confirmation_url or outcome.redirect_url
                 if result == "REQUIRES_MANUAL":
                     outcome.error_reason = "Easy Apply flow could not complete automatically."
 
@@ -193,6 +195,12 @@ class LinkedInAdapter(BaseAdapter):
 
             # ── 10. No button found — scroll more and retry ────────────────────
             else:
+                if self._job_is_unavailable(page):
+                    logs.append("LinkedIn reports that this job is unavailable or removed.")
+                    outcome.status = "SKIPPED"
+                    outcome.error_reason = "LinkedIn job is unavailable or has been removed."
+                    self._screenshot(page, screenshot_path)
+                    return outcome
                 logs.append("No apply button on initial view — scrolling + retrying...")
                 # Scroll in steps and recheck
                 found = False
@@ -200,16 +208,17 @@ class LinkedInAdapter(BaseAdapter):
                     page.evaluate(f"window.scrollTo(0, document.body.scrollHeight * {scroll_pct})")
                     page.wait_for_timeout(1500)
                     self._dismiss_modals(page, logs)
-                    if self._is_visible(page, self._EASY_APPLY_BTN, timeout=3000):
+                    if self._apply_button_visible(page, easy=True, timeout=3000):
                         logs.append(f"Easy Apply button found after scrolling to {int(scroll_pct*100)}%.")
-                        result = self._do_easy_apply(
+                        result, confirmation_url = self._do_easy_apply(
                             page, profile, context, dry_run,
                             ai_cover_letter, ai_answers, ai_client, logs, screenshot_path,
                         )
                         outcome.status = result
+                        outcome.redirect_url = confirmation_url or outcome.redirect_url
                         found = True
                         break
-                    elif self._is_visible(page, self._EXTERNAL_APPLY_BTN, timeout=2000):
+                    elif self._apply_button_visible(page, easy=False, timeout=2000):
                         logs.append(f"External button found after scrolling to {int(scroll_pct*100)}%.")
                         result, redirect = self._do_external_apply(
                             page, job, profile, context, dry_run,
@@ -222,6 +231,11 @@ class LinkedInAdapter(BaseAdapter):
                         break
 
                 if not found:
+                    if self._job_is_unavailable(page):
+                        outcome.status = "SKIPPED"
+                        outcome.error_reason = "LinkedIn job is unavailable or has been removed."
+                        self._screenshot(page, screenshot_path)
+                        return outcome
                     logs.append("Apply button not found after full page scroll.")
                     outcome.status = "REQUIRES_MANUAL"
                     outcome.error_reason = (
@@ -245,6 +259,20 @@ class LinkedInAdapter(BaseAdapter):
                     pass
 
         return outcome
+
+    @staticmethod
+    def _job_is_unavailable(page: Page) -> bool:
+        """Identify LinkedIn's terminal removed/invalid-job page."""
+        try:
+            text = page.locator("body").inner_text(timeout=2000).lower()
+            return (
+                "unable to load the page" in text
+                or "job posting has been removed" in text
+                or "job id provided may not be valid" in text
+                or "no longer accepting applications" in text
+            )
+        except Exception:
+            return False
 
     # ── External Apply: follow link → dispatch to correct adapter ─────────────
 
@@ -270,7 +298,7 @@ class LinkedInAdapter(BaseAdapter):
         import copy
 
         try:
-            btn = page.locator(self._EXTERNAL_APPLY_BTN).first
+            btn = self._apply_button_locator(page, easy=False)
 
             # Try to get href directly (links open in new tab)
             href = btn.get_attribute("href") or ""
@@ -341,16 +369,16 @@ class LinkedInAdapter(BaseAdapter):
         ai_client,
         logs: List[str],
         screenshot_path: str,
-    ) -> str:
-        """Navigate the Easy Apply modal step-by-step. Returns status string."""
+    ) -> Tuple[str, str]:
+        """Navigate Easy Apply and return (status, real post-submit URL)."""
 
         # Click Easy Apply button
         try:
-            page.locator(self._EASY_APPLY_BTN).first.click()
+            self._apply_button_locator(page, easy=True).click()
             page.wait_for_timeout(2500)
         except Exception as e:
             logs.append(f"Could not click Easy Apply: {e}")
-            return "REQUIRES_MANUAL"
+            return "REQUIRES_MANUAL", page.url
 
         # Wait for modal to appear
         try:
@@ -361,13 +389,13 @@ class LinkedInAdapter(BaseAdapter):
             page.evaluate("window.scrollTo(0, 0)")
             page.wait_for_timeout(1000)
             try:
-                page.locator(self._EASY_APPLY_BTN).first.click()
+                self._apply_button_locator(page, easy=True).click()
                 page.wait_for_timeout(2500)
                 page.wait_for_selector(self._MODAL, timeout=8000)
                 logs.append("Easy Apply modal opened on retry.")
             except Exception:
                 logs.append("Easy Apply modal could not be opened.")
-                return "REQUIRES_MANUAL"
+                return "REQUIRES_MANUAL", page.url
 
         filler = HeuristicFormFiller(
             profile=profile,
@@ -390,7 +418,7 @@ class LinkedInAdapter(BaseAdapter):
             # Detect if modal is still open
             if not self._is_visible(page, self._MODAL, timeout=3000):
                 logs.append("Modal closed — application may have been submitted.")
-                return "APPLIED"
+                return "APPLIED", page.url
 
             # Fill all inputs on this step
             resume_attached = self._fill_step(
@@ -407,12 +435,12 @@ class LinkedInAdapter(BaseAdapter):
                 logs.append("Reached Submit step ✓")
                 if dry_run:
                     logs.append("DRY RUN — not clicking Submit.")
-                    return "DRY_RUN"
+                    return "DRY_RUN", page.url
                 page.locator(self._SUBMIT_BTN).first.click()
                 page.wait_for_timeout(4000)
                 logs.append("Application submitted via Easy Apply! ✓")
                 self._dismiss_modals(page, logs)
-                return "APPLIED"
+                return "APPLIED", page.url
 
             elif has_review:
                 logs.append("Clicking Review...")
@@ -448,8 +476,8 @@ class LinkedInAdapter(BaseAdapter):
                         if not dry_run:
                             page.locator(self._SUBMIT_BTN).first.click()
                             page.wait_for_timeout(4000)
-                            return "APPLIED"
-                        return "DRY_RUN"
+                            return "APPLIED", page.url
+                        return "DRY_RUN", page.url
                     else:
                         logs.append("No way to advance — stopping.")
                         break
@@ -458,7 +486,7 @@ class LinkedInAdapter(BaseAdapter):
                     break
 
         logs.append("Reached max steps without submitting.")
-        return "REQUIRES_MANUAL"
+        return "REQUIRES_MANUAL", page.url
 
     # ── Step filling ───────────────────────────────────────────────────────────
 
@@ -772,7 +800,7 @@ class LinkedInAdapter(BaseAdapter):
             return "yes"
         return None
 
-    def _ai_answer(self, ai_client, question: str, profile: CandidateProfile, logs: List[str], options: list = None) -> Optional[str]:
+    def _ai_answer(self, ai_client, question: str, profile: CandidateProfile, logs: List[str], options: list | None = None) -> Optional[str]:
         """Use Claude AI to answer an unknown screening question."""
         try:
             opts_str = f"\nOptions: {', '.join(options)}" if options else ""
@@ -900,6 +928,41 @@ class LinkedInAdapter(BaseAdapter):
             return page.locator(selector).first.is_visible(timeout=timeout)
         except Exception:
             return False
+
+    @classmethod
+    def _apply_button_visible(cls, page: Page, easy: bool, timeout: int = 3000) -> bool:
+        """Use CSS selectors first, then LinkedIn's accessible button text."""
+        selector = cls._EASY_APPLY_BTN if easy else cls._EXTERNAL_APPLY_BTN
+        if cls._is_visible(page, selector, timeout=timeout):
+            return True
+        try:
+            pattern = re.compile(r"easy\s+apply", re.I) if easy else re.compile(r"^\s*apply\s*$", re.I)
+            for role in ("button", "link"):
+                if page.get_by_role(role, name=pattern).first.is_visible(timeout=1000):
+                    return True
+        except Exception:
+            pass
+        return False
+
+    @classmethod
+    def _apply_button_locator(cls, page: Page, easy: bool):
+        """Return the first usable CSS or accessible-name apply control."""
+        selector = cls._EASY_APPLY_BTN if easy else cls._EXTERNAL_APPLY_BTN
+        css_button = page.locator(selector).first
+        try:
+            if css_button.is_visible(timeout=1000):
+                return css_button
+        except Exception:
+            pass
+        pattern = re.compile(r"easy\s+apply", re.I) if easy else re.compile(r"^\s*apply\s*$", re.I)
+        for role in ("button", "link"):
+            candidate = page.get_by_role(role, name=pattern).first
+            try:
+                if candidate.is_visible(timeout=1000):
+                    return candidate
+            except Exception:
+                pass
+        return css_button
 
     @staticmethod
     def _elem_meta(page: Page, elem) -> str:

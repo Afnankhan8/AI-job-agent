@@ -1,0 +1,280 @@
+{% extends "base.html" %}
+{% block title %}Application Status Tracker — AI Job Agent{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">📊 Application Status Tracker</h1>
+    <p class="page-sub">Real-time status monitoring, auto-pilot control &amp; application outcomes</p>
+  </div>
+  <div class="header-right" style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;">
+    <button class="btn-action" style="background:var(--cyan);color:#000;border:none;font-weight:700;" onclick="syncLinkedInEmails()">
+      <span>🔄</span> Sync LinkedIn Emails
+    </button>
+  </div>
+</div>
+
+<!-- ── Auto-Pilot Control Banner ────────────────────────────────────────────── -->
+<div class="glass" style="padding:1.25rem 1.5rem;margin-bottom:1.75rem;border-color:rgba(124,58,237,0.3);background:linear-gradient(135deg, rgba(20,20,35,0.8), rgba(124,58,237,0.1));display:flex;align-items:center;justify-content:space-between;gap:1.5rem;flex-wrap:wrap;border-radius:16px;">
+  <div style="display:flex;align-items:center;gap:1.25rem">
+    <div style="font-size:36px;background:rgba(124,58,237,0.15);width:60px;height:60px;display:flex;align-items:center;justify-content:center;border-radius:14px;border:1px solid rgba(124,58,237,0.3)">
+      🤖
+    </div>
+    <div>
+      <div style="display:flex;align-items:center;gap:0.6rem">
+        <span style="font-size:16px;font-weight:800;color:var(--text)">AI Auto-Pilot Status</span>
+        <span id="auto-pilot-badge" class="status-badge {% if auto_pilot_running %}status-applied{% else %}status-failed{% endif %}" style="font-size:11px;padding:3px 10px;">
+          <span class="live-dot" style="margin-right:4px;background:{% if auto_pilot_running %}var(--green){% else %}var(--red){% endif %};"></span>
+          {% if auto_pilot_running %}RUNNING (PID {{ auto_pilot_pid }}){% else %}STOPPED{% endif %}
+        </span>
+      </div>
+      <div style="font-size:12.5px;color:var(--text-2);margin-top:4px">
+        Continuous background fetch, AI scoring &amp; automated application loop (runs every 45 min).
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex;gap:0.75rem;align-items:center">
+    {% if auto_pilot_running %}
+    <button class="btn-action" style="background:var(--red);color:white;border:none;padding:0.65rem 1.25rem;font-weight:700;font-size:13px" onclick="toggleAutoPilot(false)">
+      🛑 Stop Auto-Pilot
+    </button>
+    {% else %}
+    <button class="btn-action btn-ai" style="padding:0.65rem 1.25rem;font-weight:700;font-size:13px" onclick="toggleAutoPilot(true)">
+      🚀 Start Auto-Pilot Loop
+    </button>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ── Status Overview Grid ────────────────────────────────────────────────── -->
+<div class="stats-grid" style="margin-bottom:2rem">
+  <div class="stat-card glass glow-green" onclick="filterStatus('APPLIED')" style="cursor:pointer">
+    <div class="stat-label">Applied (Submitted)</div>
+    <div class="stat-value" style="color:var(--green)">{{ summary.get('APPLIED', 0) }}</div>
+    <div class="stat-sub">Successfully submitted applications</div>
+  </div>
+
+  <div class="stat-card glass glow-cyan" onclick="filterStatus('DRY_RUN')" style="cursor:pointer">
+    <div class="stat-label">Dry Run / Filled</div>
+    <div class="stat-value" style="color:var(--cyan)">{{ summary.get('DRY_RUN', 0) }}</div>
+    <div class="stat-sub">Forms filled without submitting</div>
+  </div>
+
+  <div class="stat-card glass glow-orange" onclick="filterStatus('REQUIRES_MANUAL')" style="cursor:pointer">
+    <div class="stat-label">Needs Manual Action</div>
+    <div class="stat-value" style="color:var(--orange)">{{ summary.get('REQUIRES_MANUAL', 0) }}</div>
+    <div class="stat-sub">External links or auth required</div>
+  </div>
+
+  <div class="stat-card glass glow-purple" onclick="filterStatus('PREV_APPLIED')" style="cursor:pointer">
+    <div class="stat-label">Prev. Applied Detected</div>
+    <div class="stat-value" style="color:var(--purple)">{{ already_det_count }}</div>
+    <div class="stat-sub">De-duplicated duplicate postings</div>
+  </div>
+
+  <div class="stat-card glass" onclick="filterStatus('FAILED')" style="cursor:pointer">
+    <div class="stat-label">Failed Attempts</div>
+    <div class="stat-value" style="color:var(--red)">{{ summary.get('FAILED', 0) }}</div>
+    <div class="stat-sub">Errors or timeout issues</div>
+  </div>
+</div>
+
+<!-- ── Filter & Search Toolbar ─────────────────────────────────────────────── -->
+<div class="glass" style="padding:1rem 1.25rem;margin-bottom:1.5rem;display:flex;gap:1rem;align-items:center;justify-content:space-between;flex-wrap:wrap;border-radius:14px;">
+  <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap" id="status-filter-pills">
+    <button class="status-pill active" onclick="filterStatus('ALL')" data-status="ALL">
+      All Records ({{ apps|length }})
+    </button>
+    <button class="status-pill" onclick="filterStatus('APPLIED')" data-status="APPLIED" style="color:var(--green)">
+      ✅ Applied ({{ summary.get('APPLIED', 0) }})
+    </button>
+    <button class="status-pill" onclick="filterStatus('REQUIRES_MANUAL')" data-status="REQUIRES_MANUAL" style="color:var(--orange)">
+      ⚠️ Needs Manual ({{ summary.get('REQUIRES_MANUAL', 0) }})
+    </button>
+    <button class="status-pill" onclick="filterStatus('PREV_APPLIED')" data-status="PREV_APPLIED" style="color:var(--purple)">
+      🔒 Prev. Applied ({{ already_det_count }})
+    </button>
+    <button class="status-pill" onclick="filterStatus('FAILED')" data-status="FAILED" style="color:var(--red)">
+      ❌ Failed ({{ summary.get('FAILED', 0) }})
+    </button>
+  </div>
+
+  <div style="position:relative;min-width:240px">
+    <input type="text" id="status-search-input" placeholder="🔍 Search applications..." oninput="searchStatusTable()"
+           style="width:100%;padding:0.5rem 0.9rem;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:8px;color:var(--text);font-size:13px;" />
+  </div>
+</div>
+
+<!-- ── Applications Status Table ────────────────────────────────────────────── -->
+{% if apps %}
+<div class="apps-table-wrap glass" style="margin-bottom:2.5rem;border-radius:14px;">
+  <table class="apps-table" id="status-table">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Job Title &amp; Company</th>
+        <th>Location</th>
+        <th>Status</th>
+        <th>LinkedIn Reply</th>
+        <th>AI Score</th>
+        <th>Outcome Diagnostic / Reason</th>
+        <th style="text-align:right">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in apps %}
+      {% set is_prev_det = 'Already applied' in (a.error_reason or '') %}
+      <tr class="status-row" data-status="{% if is_prev_det %}PREV_APPLIED{% else %}{{ a.status }}{% endif %}" data-search="{{ (a.title ~ ' ' ~ (a.company or '') ~ ' ' ~ (a.error_reason or ''))|lower }}">
+        <td style="font-family:var(--font-mono);font-size:11px;color:var(--text-3)">#{{ a.id }}</td>
+        <td class="td-title">
+          <div style="font-weight:700;font-size:14px">
+            <a href="{{ url_for('job_detail', job_id=a.job_id) }}" style="color:var(--text);text-decoration:none" class="title-link">
+              {{ a.title }}
+            </a>
+          </div>
+          <div style="font-size:12px;color:var(--text-2);margin-top:2px">
+            {{ a.company or 'Unknown Company' }}
+          </div>
+        </td>
+        <td style="color:var(--text-3);font-size:12px">{{ a.location or 'Remote' }}</td>
+        <td>
+          {% if is_prev_det %}
+          <span class="status-badge" style="background:rgba(157,113,255,0.12);color:var(--purple);border:1px solid rgba(157,113,255,0.25);">
+            🔒 PREV APPLIED
+          </span>
+          {% else %}
+          <span class="status-badge status-{{ a.status|lower }}">{{ a.status }}</span>
+          {% endif %}
+        </td>
+        <td style="font-size:12px;color:var(--text-2)">
+          {% if a.response_status and a.response_status != 'AWAITING_REPLY' %}
+          <span class="status-badge status-{{ a.response_status|lower }}">{{ a.response_status }}</span>
+          <div style="margin-top:4px">{{ a.response_received_at or '' }}</div>
+          {% else %}
+          <span style="color:var(--text-3)">AWAITING_REPLY</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if a.ai_match_score %}
+          <span class="inline-score">{{ a.ai_match_score }}%</span>
+          {% else %}<span style="color:var(--text-3)">—</span>{% endif %}
+        </td>
+        <td class="td-notes" style="font-size:12px;color:{% if is_prev_det %}var(--purple){% elif a.status=='REQUIRES_MANUAL' %}var(--orange){% elif a.status=='FAILED' %}var(--red){% elif a.status=='APPLIED' %}var(--green){% else %}var(--text-2){% endif %}">
+          {{ a.error_reason[:100] if a.error_reason else 'Completed successfully' }}
+        </td>
+        <td style="text-align:right;white-space:nowrap">
+          <button class="btn-clear" style="font-size:11px;padding:4px 10px;margin-right:4px;" onclick="inspectApp({{ a.id }})">
+            🔍 Inspect Logs
+          </button>
+          {% if a.job_url %}
+          <a href="{{ a.job_url }}" target="_blank" class="btn-clear" style="font-size:11px;padding:4px 10px;text-decoration:none;display:inline-block">
+            ↗ Open Link
+          </a>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty-state glass">
+  <div class="empty-icon">📊</div>
+  <h3>No status records tracked yet</h3>
+  <p>Start the Auto-Pilot loop or fetch fresh jobs to generate live status records.</p>
+</div>
+{% endif %}
+
+<style>
+.status-pill {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: var(--text-2);
+  padding: 5px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.status-pill:hover, .status-pill.active {
+  background: rgba(124,58,237,0.2);
+  border-color: rgba(124,58,237,0.4);
+  color: #fff;
+  transform: translateY(-1px);
+}
+.title-link:hover {
+  color: var(--purple) !important;
+  text-decoration: underline !important;
+}
+</style>
+
+<script>
+let currentFilter = 'ALL';
+
+function filterStatus(status) {
+  currentFilter = status;
+  
+  // Update pill active states
+  document.querySelectorAll('.status-pill').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-status') === status);
+  });
+
+  applyFilters();
+}
+
+function searchStatusTable() {
+  applyFilters();
+}
+
+function applyFilters() {
+  const query = (document.getElementById('status-search-input').value || '').toLowerCase().trim();
+  const rows = document.querySelectorAll('.status-row');
+
+  rows.forEach(row => {
+    const rowStatus = row.getAttribute('data-status');
+    const rowSearch = row.getAttribute('data-search');
+
+    const matchesStatus = (currentFilter === 'ALL') || (rowStatus === currentFilter);
+    const matchesSearch = !query || rowSearch.includes(query);
+
+    if (matchesStatus && matchesSearch) {
+      row.style.display = '';
+    } else {
+      row.style.display = 'none';
+    }
+  });
+}
+
+async function toggleAutoPilot(start) {
+  const endpoint = start ? '/run/agent_loop' : '/run/agent_loop/stop';
+  try {
+    const res = await fetch(endpoint, { method: 'POST' });
+    const data = await res.json();
+    if (data.status === 'started' || data.status === 'stopped' || data.status === 'already_running') {
+      window.location.reload();
+    } else {
+      alert('Action returned: ' + JSON.stringify(data));
+    }
+  } catch(e) {
+    alert('Error toggling auto-pilot: ' + e);
+  }
+}
+
+async function syncLinkedInEmails() {
+  try {
+    const response = await fetch('/api/status/sync', { method: 'POST' });
+    const data = await response.json();
+    if (data.status === 'success') {
+      alert(data.message);
+      window.location.reload();
+    } else {
+      alert('Email sync failed: ' + data.message);
+    }
+  } catch (error) {
+    alert('Email sync failed: ' + error);
+  }
+}
+</script>
+{% endblock %}

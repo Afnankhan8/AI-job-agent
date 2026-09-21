@@ -93,6 +93,10 @@ class SessionManager:
             url = page.url
             if any(x in url for x in ["/login", "/signup", "/authwall", "/uas/login"]):
                 return False
+            # LinkedIn's navigation markup changes frequently; reaching the
+            # authenticated feed is a stronger signal than a profile icon selector.
+            if "/feed" in urlparse(url).path:
+                return True
             logged_in = page.locator(
                 "[data-control-name='nav.homepage'], "
                 ".global-nav__me-photo, "
@@ -117,7 +121,7 @@ class SessionManager:
           1. Navigate to /login
           2. Fill email + password from profile
           3. Submit and wait for redirect
-          4. Auto-handle CAPTCHA/2FA — wait up to 90s per challenge
+          4. Detect CAPTCHA/2FA and wait for the user's verification
           5. Verify logged in via feed URL
         """
         p = self.profile.personal
@@ -127,9 +131,6 @@ class SessionManager:
 
         page = self._new_page()
         try:
-            self._log("Clearing stale cookies to prevent Sign-Up redirect traps...")
-            self.context.clear_cookies()
-            
             self._log(f"Opening LinkedIn login page ({self.LINKEDIN_LOGIN})...")
             page.goto(self.LINKEDIN_LOGIN, wait_until="domcontentloaded", timeout=20000)
             page.wait_for_timeout(3000)
@@ -159,8 +160,9 @@ class SessionManager:
             email_filled = False
             for inp in page.locator(email_sel).all():
                 if inp.is_visible():
-                    inp.focus()
-                    inp.press_sequentially(p.linkedin_email, delay=50)
+                    # LinkedIn/Chrome may autofill this field before Playwright
+                    # reaches it; fill replaces the value instead of appending.
+                    inp.fill(p.linkedin_email)
                     email_filled = True
                     break
             if not email_filled:
@@ -176,8 +178,7 @@ class SessionManager:
             pwd_filled = False
             for inp in page.locator(password_sel).all():
                 if inp.is_visible():
-                    inp.focus()
-                    inp.press_sequentially(p.linkedin_password, delay=100)
+                    inp.fill(p.linkedin_password)
                     pwd_filled = True
                     break
             if not pwd_filled:
@@ -196,24 +197,15 @@ class SessionManager:
             page.wait_for_timeout(5000)
 
             # ── Handle post-login challenges ───────────────────────────────────
-            # Wait for feed or challenge URL
-            for _ in range(45): # wait up to 90s
-                url = page.url
-                path = urlparse(url).path
-                
-                # Check for successful login by verifying we landed on /feed or /jobs
+            challenge_notice = False
+            for _ in range(150):  # 150 x 2s = 5 minutes maximum
+                path = urlparse(page.url).path
+
                 if "/feed" in path or "/jobs" in path or "/in/" in path:
                     self._log("Successfully logged in.")
                     self._linkedin_ok = True
                     return True
-                    
-                # Check if we were redirected to a challenge
-                if "challenge" in path or "checkpoint" in path:
-                    self._log("Challenge/2FA detected. Waiting 90s for manual input or auto-resolve...")
-                    page.wait_for_timeout(2000)
-                    continue
 
-                # Wrong password / locked
                 if "/login" in path:
                     err_visible = page.locator(
                         ".alert--error, [data-test-id='error-message'], "
@@ -223,33 +215,24 @@ class SessionManager:
                         self._log("Login failed — incorrect credentials or account locked.")
                         return False
 
-                # CAPTCHA / browser verification
-                if "checkpoint" in path or "challenge" in path:
-                    self._log("⚠️  LinkedIn security challenge detected! Waiting up to 90s...")
-                    print("\n>>> LINKEDIN CHALLENGE: Complete the verification in the browser window! <<<\n")
-                    for _ in range(45):  # 45 × 2s = 90s
-                        page.wait_for_timeout(2000)
-                        if any(x in page.url for x in ["/feed", "/jobs"]):
-                            self._log("Challenge passed ✓")
-                            return True
-                        if "/login" in page.url:
-                            break
-                    continue
+                is_challenge = any(
+                    marker in path
+                    for marker in ("challenge", "checkpoint", "verification", "two-step", "otp")
+                )
+                if is_challenge and not challenge_notice:
+                    challenge_notice = True
+                    self._log("LinkedIn verification required. Complete it in the visible browser window.")
+                    print("\n>>> LINKEDIN VERIFICATION: Complete it in the visible browser window. <<<\n")
 
-                # 2FA — email or app code
-                if any(x in path for x in ["verification", "two-step", "otp"]):
-                    self._log("⚠️  LinkedIn 2FA detected! Waiting up to 90s for verification code...")
-                    print("\n>>> LINKEDIN 2FA: Enter your verification code in the browser! <<<\n")
-                    for _ in range(45):  # 45 × 2s = 90s
-                        page.wait_for_timeout(2000)
-                        if any(x in page.url for x in ["/feed", "/jobs"]):
-                            self._log("2FA passed ✓")
-                            return True
-                    continue
+                page.wait_for_timeout(2000)
 
-                # Still not on feed — try navigating there
-                page.goto(self.LINKEDIN_FEED, wait_until="domcontentloaded", timeout=15000)
-                page.wait_for_timeout(3000)
+            if challenge_notice:
+                self._log("LinkedIn verification timed out. Run login again and complete the challenge.")
+                return False
+
+            # Still not on a logged-in page: make one final navigation attempt.
+            page.goto(self.LINKEDIN_FEED, wait_until="domcontentloaded", timeout=15000)
+            page.wait_for_timeout(3000)
 
             # Final URL check
             if any(x in page.url for x in ["/feed", "/jobs"]):

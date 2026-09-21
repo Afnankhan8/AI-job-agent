@@ -20,6 +20,8 @@ from flask import Flask, render_template, jsonify, request, redirect, url_for
 from config.settings import SETTINGS
 from database.models import init_db, get_connection
 from database.repository import JobRepository
+from applier.browser_utils import launch_safe_context
+from email_tracker import sync_linkedin_emails
 
 app = Flask(__name__)
 app.secret_key = "ai-job-agent-dashboard"
@@ -45,24 +47,31 @@ def get_repo():
 def api_stats():
     conn, repo = get_repo()
     try:
-        all_jobs    = repo.list_active_jobs(limit=1000)
+        # Only count truly unapplied fresh jobs (exclude detected-applied)
+        all_jobs    = repo.list_active_jobs(limit=1000, unapplied_only=True)
         today       = sum(1 for j in all_jobs if j.freshness_label in ("TODAY", "NEW"))
         scored      = sum(1 for j in all_jobs if j.ai_match_score is not None)
         strong      = sum(1 for j in all_jobs if (j.ai_match_score or 0) >= 80)
         good        = sum(1 for j in all_jobs if 60 <= (j.ai_match_score or 0) < 80)
-        app_summary = repo.get_application_summary()
+        # Use clean summary — exclude "already applied detected" records
+        app_summary = repo.get_application_summary_clean()
         applied     = app_summary.get("APPLIED", 0)
         pending     = app_summary.get("PENDING", 0)
         manual      = app_summary.get("REQUIRES_MANUAL", 0)
+        # Count detected-already-applied separately
+        already_det = conn.execute(
+            "SELECT COUNT(*) FROM applications WHERE error_reason LIKE '%Already applied%'"
+        ).fetchone()[0]
         return jsonify({
-            "total":   len(all_jobs),
-            "today":   today,
-            "scored":  scored,
-            "strong":  strong,
-            "good":    good,
-            "applied": applied,
-            "pending": pending,
-            "manual":  manual,
+            "total":        len(all_jobs),
+            "today":        today,
+            "scored":       scored,
+            "strong":       strong,
+            "good":         good,
+            "applied":      applied,
+            "pending":      pending,
+            "manual":       manual,
+            "already_det":  already_det,
         })
     finally:
         conn.close()
@@ -70,10 +79,11 @@ def api_stats():
 
 @app.route("/api/feed")
 def api_feed():
-    """Return latest 60 jobs as JSON — polled by the frontend every 30 s."""
+    """Return latest fresh unapplied jobs — freshest (TODAY/NEW) first."""
     conn, repo = get_repo()
     try:
-        jobs = repo.list_active_jobs(limit=60)
+        # Always show TODAY+NEW at top, then RECENT
+        jobs = repo.list_active_jobs(limit=60, unapplied_only=True)
         result = []
         for j in jobs:
             result.append({
@@ -94,6 +104,27 @@ def api_feed():
             "count":     len(result),
             "timestamp": __import__("datetime").datetime.now().isoformat(),
         })
+    finally:
+        conn.close()
+
+
+@app.route("/api/fresh-stats")
+def api_fresh_stats():
+    """Return stats for fresh (TODAY + NEW) unapplied jobs only."""
+    conn, repo = get_repo()
+    try:
+        return jsonify(repo.get_fresh_stats())
+    finally:
+        conn.close()
+
+
+@app.route("/api/already-applied")
+def api_already_applied():
+    """Return jobs that were detected as already-applied by the adapter."""
+    conn, repo = get_repo()
+    try:
+        rows = repo.get_already_applied_detected(limit=200)
+        return jsonify({"items": rows, "count": len(rows)})
     finally:
         conn.close()
 
@@ -172,6 +203,21 @@ def api_apply(job_id):
         profile = CandidateProfile.load_from_file(SETTINGS.user_profile_path)
         job = jobs[0]
 
+        # Never submit a job that already has a confirmed application record,
+        # even if the request was made directly instead of from the jobs page.
+        c2 = gc(SETTINGS.database_path)
+        r2 = JR(c2)
+        already_applied = c2.execute(
+            "SELECT 1 FROM applications WHERE job_id = ? AND status = 'APPLIED' LIMIT 1",
+            (job.id,),
+        ).fetchone()
+        if already_applied:
+            c2.close()
+            return jsonify({
+                "status": "SKIPPED",
+                "error": "This job is already marked as applied; no duplicate submission was attempted.",
+            })
+
         # Build AI client (optional — falls back gracefully)
         try:
             ai_client = get_ai_client()
@@ -183,20 +229,15 @@ def api_apply(job_id):
         # AI cover letter
         ai_cover_letter = job.ai_cover_letter or profile.cover_letter_template
 
-        c2 = gc(SETTINGS.database_path)
-        r2 = JR(c2)
         app_id = r2.create_application(job.id, status="PENDING")
 
         ctx = None
         try:
             with sync_playwright() as p:
-                ctx = p.chromium.launch_persistent_context(
-                    user_data_dir=str(Path(__file__).parent.parent / "browser_profile"),
+                ctx, _ = launch_safe_context(
+                    p,
+                    user_data_dir=Path(__file__).parent.parent / "browser_profile",
                     headless=not headful,
-                    args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
-                    viewport={"width": 1280, "height": 900},
-                    locale="en-US",
                 )
 
                 resolved_url, _ = resolve_url(job.url)
@@ -245,10 +286,30 @@ def api_apply(job_id):
             ai_cover_letter=ai_cover_letter,
         )
         c2.close()
-        return jsonify({"status": outcome.status, "error": outcome.error_reason})
+        return jsonify({
+            "status": outcome.status,
+            "error": outcome.error_reason,
+            "application_url": outcome.redirect_url,
+        })
 
     except Exception as e:
         return jsonify({"status": "FAILED", "error": str(e)}), 500
+
+
+@app.route("/api/clear", methods=["POST"])
+def api_clear():
+    """Clear old and already applied jobs from the database."""
+    conn, repo = get_repo()
+    try:
+        result = repo.clear_jobs(clear_applied=True, clear_old=True)
+        return jsonify({
+            "status": "success", 
+            "message": f"Cleared {result['deleted_jobs']} jobs and {result['deleted_apps']} apps."
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        conn.close()
 
 
 
@@ -263,21 +324,26 @@ def index():
 def jobs_page():
     conn, repo = get_repo()
     try:
-        all_jobs = repo.list_active_jobs(limit=500)
+        # Default: show unapplied only, freshest first; exclude detected-applied
+        all_jobs = repo.list_active_jobs(limit=500, unapplied_only=True)
 
         # Filters from query string
-        q         = request.args.get("q", "").lower()
-        freshness = request.args.get("freshness", "")
-        source    = request.args.get("source", "")
-        min_score = request.args.get("min_score", "")
-        sort      = request.args.get("sort", "recent")
+        q          = request.args.get("q", "").lower()
+        freshness  = request.args.get("freshness", "")
+        source     = request.args.get("source", "")
+        min_score  = request.args.get("min_score", "")
+        sort       = request.args.get("sort", "fresh")   # default: fresh first
+        fresh_only = request.args.get("fresh_only", "")  # new: 24h filter
 
         filtered = all_jobs
 
+        if fresh_only:
+            filtered = [j for j in filtered if j.freshness_label in ("TODAY", "NEW")]
         if q:
             filtered = [j for j in filtered
                         if q in (j.title or "").lower()
-                        or q in (j.company or "").lower()]
+                        or q in (j.company or "").lower()
+                        or q in (j.location or "").lower()]
         if freshness:
             filtered = [j for j in filtered if j.freshness_label == freshness]
         if source:
@@ -289,11 +355,15 @@ def jobs_page():
             except ValueError:
                 pass
 
+        FRESH_ORDER = {"TODAY": 0, "NEW": 1, "RECENT": 2, "OLD": 3}
         if sort == "score":
             filtered.sort(key=lambda j: j.ai_match_score or 0, reverse=True)
         elif sort == "company":
             filtered.sort(key=lambda j: (j.company or "").lower())
-        # default: recent (already ordered by last_seen_at DESC from DB)
+        else:  # fresh (default) — TODAY/NEW first, then newest date within each tier
+            # Python sort is stable: sort by date desc first, then by tier asc (stable keeps date order)
+            filtered.sort(key=lambda j: j.last_seen_at or "", reverse=True)
+            filtered.sort(key=lambda j: FRESH_ORDER.get(j.freshness_label or "OLD", 3))
 
         return render_template("jobs.html",
                                jobs=filtered,
@@ -302,6 +372,7 @@ def jobs_page():
                                source=source,
                                min_score=min_score,
                                sort=sort,
+                               fresh_only=fresh_only,
                                total=len(filtered))
     finally:
         conn.close()
@@ -332,20 +403,83 @@ def job_detail(job_id):
 def applications_page():
     conn, repo = get_repo()
     try:
+        # Clean applications — exclude "Already applied (detected on page)"
         rows = conn.execute(
             """
             SELECT a.*, j.title, j.company, j.url AS job_url, j.location
             FROM applications a
             JOIN jobs j ON j.id = a.job_id
+            WHERE (a.error_reason NOT LIKE '%Already applied%' OR a.error_reason IS NULL)
             ORDER BY a.id DESC
             LIMIT 200
             """
         ).fetchall()
         apps = [dict(r) for r in rows]
-        summary = repo.get_application_summary()
-        return render_template("applications.html", apps=apps, summary=summary)
+
+        # Already-applied detected — for separate section
+        det_rows = repo.get_already_applied_detected(limit=300)
+
+        # Use clean summary for badge counts
+        summary = repo.get_application_summary_clean()
+        already_det_count = conn.execute(
+            "SELECT COUNT(*) FROM applications WHERE error_reason LIKE '%Already applied%'"
+        ).fetchone()[0]
+
+        return render_template(
+            "applications.html",
+            apps=apps,
+            summary=summary,
+            already_applied=det_rows,
+            already_det_count=already_det_count,
+        )
     finally:
         conn.close()
+
+
+@app.route("/status")
+def status_page():
+    """Dedicated Application Status Tracker page."""
+    conn, repo = get_repo()
+    try:
+        rows = conn.execute(
+            """
+            SELECT a.*, j.title, j.company, j.url AS job_url, j.location, j.ai_match_score, j.freshness_label
+            FROM applications a
+            JOIN jobs j ON j.id = a.job_id
+            ORDER BY a.id DESC
+            LIMIT 500
+            """
+        ).fetchall()
+        apps = [dict(r) for r in rows]
+
+        summary = repo.get_application_summary_clean()
+        already_det_count = conn.execute(
+            "SELECT COUNT(*) FROM applications WHERE error_reason LIKE '%Already applied%'"
+        ).fetchone()[0]
+
+        global AGENT_LOOP_PROC
+        is_auto_pilot_running = AGENT_LOOP_PROC is not None and AGENT_LOOP_PROC.poll() is None
+
+        return render_template(
+            "status.html",
+            apps=apps,
+            summary=summary,
+            already_det_count=already_det_count,
+            auto_pilot_running=is_auto_pilot_running,
+            auto_pilot_pid=AGENT_LOOP_PROC.pid if is_auto_pilot_running else None,
+        )
+    finally:
+        conn.close()
+
+
+@app.route("/api/status/sync", methods=["POST"])
+def api_status_sync():
+    """Import LinkedIn status emails into the application tracker."""
+    try:
+        count, message = sync_linkedin_emails()
+        return jsonify({"status": "success", "count": count, "message": message})
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 500
 
 
 @app.route("/profile", methods=["GET", "POST"])
@@ -494,11 +628,54 @@ def api_application_detail(app_id):
         conn.close()
 
 
+# Global reference to running agent_loop process
+AGENT_LOOP_PROC = None
+
+@app.route("/run/agent_loop", methods=["POST"])
+def run_agent_loop_endpoint():
+    """Start the fully automated fetch+score+apply loop in the background."""
+    global AGENT_LOOP_PROC
+    if AGENT_LOOP_PROC and AGENT_LOOP_PROC.poll() is None:
+        return jsonify({"status": "already_running", "pid": AGENT_LOOP_PROC.pid})
+
+    root_dir = Path(__file__).parent.parent
+    AGENT_LOOP_PROC = subprocess.Popen(
+        [sys.executable, "agent_loop.py"],
+        cwd=str(root_dir),
+    )
+    return jsonify({"status": "started", "pid": AGENT_LOOP_PROC.pid})
+
+
+@app.route("/run/agent_loop/stop", methods=["POST"])
+def stop_agent_loop_endpoint():
+    """Stop the background auto-pilot loop."""
+    global AGENT_LOOP_PROC
+    if AGENT_LOOP_PROC and AGENT_LOOP_PROC.poll() is None:
+        AGENT_LOOP_PROC.terminate()
+        try:
+            AGENT_LOOP_PROC.wait(timeout=5)
+        except Exception:
+            AGENT_LOOP_PROC.kill()
+        AGENT_LOOP_PROC = None
+        return jsonify({"status": "stopped"})
+    return jsonify({"status": "not_running"})
+
+
+@app.route("/api/agent_loop/status")
+def agent_loop_status():
+    """Check if the auto-pilot background process is currently running."""
+    global AGENT_LOOP_PROC
+    is_running = AGENT_LOOP_PROC is not None and AGENT_LOOP_PROC.poll() is None
+    return jsonify({
+        "running": is_running,
+        "pid": AGENT_LOOP_PROC.pid if is_running else None,
+    })
+
+
 @app.route("/run/login", methods=["POST"])
 def run_login():
     """Launch interactive browser login session (headful) in background."""
     def _run():
-        import subprocess
         subprocess.run([sys.executable, "auto_apply.py", "--login-only"], cwd=str(Path(__file__).parent.parent))
     t = threading.Thread(target=_run, daemon=True)
     t.start()
@@ -510,8 +687,9 @@ def run_login():
 
 if __name__ == "__main__":
     import sys
-    if sys.platform == "win32":
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if sys.platform == 'win32':
+        if hasattr(sys.stdout, 'reconfigure'):
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')  # type: ignore
     init_db(SETTINGS.database_path)
     # Open browser after a short delay
     def _open():
