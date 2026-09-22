@@ -99,9 +99,6 @@ class ClaudeClient:
         if system_prompt:
             kwargs["system"] = system_prompt
 
-        # Claude temperature range is 0.0–1.0
-        kwargs["temperature"] = max(0.0, min(1.0, temperature))
-
         last_error: Optional[str] = None
         for attempt in range(1, self.retries + 1):
             try:

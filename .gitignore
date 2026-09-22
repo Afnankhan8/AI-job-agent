@@ -6,7 +6,9 @@ __pycache__/
 browser_profile/
 screenshots/
 applications/screenshots/
+applications/diagnostics/
 config/user_profile.json
+resume.pdf
 *.csv
 *.png
 *.txt

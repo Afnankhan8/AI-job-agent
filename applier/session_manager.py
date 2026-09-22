@@ -49,40 +49,36 @@ class SessionManager:
         Returns dict of {platform: True/False}.
         """
         results = {}
-        if self.profile.personal.linkedin_email and self.profile.personal.linkedin_password:
+        if self.profile.personal.linkedin_email:
             results["linkedin"] = self.ensure_linkedin()
         return results
 
     def ensure_linkedin(self) -> bool:
         """
         Ensure we have a live LinkedIn session.
-        Auto-logs in if session expired. Returns True if logged in.
+        Returns True only when the existing persistent session is live.
         """
         self._log("Checking LinkedIn session...")
-        if self.is_linkedin_logged_in():
-            self._log("LinkedIn: already logged in ✓")
-            self._linkedin_ok = True
-            return True
+        for attempt in range(1, 3):
+            if self.is_linkedin_logged_in():
+                self._log("LinkedIn: already logged in ✓")
+                self._linkedin_ok = True
+                return True
+            if attempt == 1:
+                self._log("LinkedIn session check was inconclusive; retrying...")
+                time.sleep(2)
 
-        self._log("LinkedIn: session expired — auto-logging in with stored credentials...")
-        success = self._login_linkedin()
-        self._linkedin_ok = success
-        if success:
-            self._log("LinkedIn: auto-login successful ✓")
-        else:
-            self._log("LinkedIn: auto-login failed ✗ — check credentials in config/user_profile.json")
-        return success
+        self._log("LinkedIn: session expired — stop and complete login manually in a visible browser.")
+        return False
 
     def re_login_linkedin(self) -> bool:
         """
         Force a fresh LinkedIn login even if session appears active.
         Called by adapters when they hit an authwall mid-apply.
         """
-        self._log("LinkedIn: forced re-login triggered...")
+        self._log("LinkedIn: forced re-login requested; human login is required.")
         self._linkedin_ok = False
-        success = self._login_linkedin()
-        self._linkedin_ok = success
-        return success
+        return False
 
     def is_linkedin_logged_in(self) -> bool:
         """Quick check — open feed page, see if the nav profile icon is visible."""
@@ -221,8 +217,8 @@ class SessionManager:
                 )
                 if is_challenge and not challenge_notice:
                     challenge_notice = True
-                    self._log("LinkedIn verification required. Complete it in the visible browser window.")
-                    print("\n>>> LINKEDIN VERIFICATION: Complete it in the visible browser window. <<<\n")
+                    self._log("LinkedIn verification required. Stopping for human intervention.")
+                    return False
 
                 page.wait_for_timeout(2000)
 
@@ -254,28 +250,7 @@ class SessionManager:
     # ── Helpers ────────────────────────────────────────────────────────────────
 
     def _new_page(self) -> Page:
-        """Open a new page with stealth applied."""
+        """Open a new page in the persistent browser context."""
         page = self.context.new_page()
         
-        # Aggressively override webdriver properties to bypass LinkedIn's silent bot trap
-        page.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-            window.chrome = {
-                runtime: {}
-            };
-            Object.defineProperty(navigator, 'plugins', {
-                get: () => [1, 2, 3],
-            });
-            Object.defineProperty(navigator, 'languages', {
-                get: () => ['en-US', 'en'],
-            });
-        """)
-        
-        try:
-            from playwright_stealth import Stealth
-            Stealth().apply_stealth_sync(page)
-        except Exception:
-            pass
         return page

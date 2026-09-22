@@ -343,6 +343,8 @@ def run_auto_apply(
             status_labels = {
                 "APPLIED":          "  APPLIED",
                 "DRY_RUN":          "  FILLED (dry-run)",
+                "WAITING_FOR_HUMAN_CONFIRMATION": "  WAITING FOR HUMAN CONFIRMATION",
+                "VERIFICATION_REQUIRED": "  VERIFICATION REQUIRED",
                 "REQUIRES_MANUAL":  "  MANUAL NEEDED",
                 "FAILED":           "  FAILED",
             }

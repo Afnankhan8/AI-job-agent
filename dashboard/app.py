@@ -182,6 +182,7 @@ def api_apply(job_id):
     """Trigger V2 adapter auto-apply for a single job (AJAX)."""
     dry_run = request.json.get("dry_run", True)
     headful  = request.json.get("headful", False)
+    human_confirmed = request.json.get("human_confirmed", False)
 
     conn, repo = get_repo()
     all_jobs = repo.list_active_jobs(limit=1000)
@@ -253,6 +254,7 @@ def api_apply(job_id):
                     ai_answers={},
                     screenshots_dir=SETTINGS.screenshots_dir,
                     ai_client=ai_client,
+                    human_confirmed=human_confirmed,
                 )
                 try:
                     ctx.close()

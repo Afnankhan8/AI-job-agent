@@ -11,10 +11,12 @@ Full automatic pipeline:
   7. Record outcome in DB
 """
 
+import json
 import os
 import re
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional, List, Tuple
 
 from playwright.sync_api import BrowserContext, Page
@@ -93,6 +95,7 @@ class LinkedInAdapter(BaseAdapter):
         screenshots_dir: str = "applications/screenshots",
         ai_client=None,
         _session_manager=None,
+        human_confirmed: bool = False,
     ) -> AdapterOutcome:
         logs = [f"[linkedin] Applying to: {job.title} @ {job.company}"]
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -116,26 +119,38 @@ class LinkedInAdapter(BaseAdapter):
             page.goto(job_url, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(3000)
 
+            if self._verification_required(page):
+                logs.append("[LinkedIn][VERIFICATION_REQUIRED] Security verification detected; stopping.")
+                outcome.status = "VERIFICATION_REQUIRED"
+                outcome.error_reason = "LinkedIn verification or challenge requires human intervention."
+                return outcome
+
             # ── 2. Auto-handle auth wall ───────────────────────────────────────
             if self._is_auth_wall(page.url):
-                logs.append("Auth wall hit — auto re-logging in...")
+                logs.append("Auth wall hit — human login is required.")
                 # Try to re-login using session manager
                 if _session_manager is not None:
                     ok = _session_manager.re_login_linkedin()
                 else:
-                    # Fallback: do inline login
-                    ok = self._inline_login(page, profile, logs)
+                    ok = False
+                    logs.append("No session manager available; human login is required.")
 
                 if ok:
                     logs.append("Re-login succeeded — retrying navigation.")
                     page.goto(job_url, wait_until="domcontentloaded", timeout=30000)
                     page.wait_for_timeout(3000)
                 else:
-                    logs.append("Re-login failed — check credentials in user_profile.json")
-                    outcome.status = "FAILED"
-                    outcome.error_reason = "Auto-login failed. Check email/password in config/user_profile.json"
+                    logs.append("Human login is required before continuing.")
+                    outcome.status = "VERIFICATION_REQUIRED"
+                    outcome.error_reason = "LinkedIn authentication is required. Complete login manually in a visible browser."
                     self._screenshot(page, screenshot_path)
                     return outcome
+
+            if self._verification_required(page):
+                logs.append("[LinkedIn][VERIFICATION_REQUIRED] Verification appeared after login; stopping.")
+                outcome.status = "VERIFICATION_REQUIRED"
+                outcome.error_reason = "LinkedIn verification or challenge requires human intervention."
+                return outcome
 
             # ── 3. Still on auth wall? ─────────────────────────────────────────
             if self._is_auth_wall(page.url):
@@ -174,6 +189,7 @@ class LinkedInAdapter(BaseAdapter):
                 result, confirmation_url = self._do_easy_apply(
                     page, profile, context, dry_run,
                     ai_cover_letter, ai_answers, ai_client, logs, screenshot_path,
+                    human_confirmed,
                 )
                 outcome.status = result
                 outcome.redirect_url = confirmation_url or outcome.redirect_url
@@ -213,6 +229,7 @@ class LinkedInAdapter(BaseAdapter):
                         result, confirmation_url = self._do_easy_apply(
                             page, profile, context, dry_run,
                             ai_cover_letter, ai_answers, ai_client, logs, screenshot_path,
+                            human_confirmed,
                         )
                         outcome.status = result
                         outcome.redirect_url = confirmation_url or outcome.redirect_url
@@ -254,6 +271,7 @@ class LinkedInAdapter(BaseAdapter):
         finally:
             if page:
                 try:
+                    self._write_diagnostics(page, job, outcome, screenshot_path)
                     page.close()
                 except Exception:
                     pass
@@ -369,6 +387,7 @@ class LinkedInAdapter(BaseAdapter):
         ai_client,
         logs: List[str],
         screenshot_path: str,
+        human_confirmed: bool,
     ) -> Tuple[str, str]:
         """Navigate Easy Apply and return (status, real post-submit URL)."""
 
@@ -427,15 +446,19 @@ class LinkedInAdapter(BaseAdapter):
             )
 
             # Check available navigation buttons
-            has_submit = self._is_visible(page, self._SUBMIT_BTN, timeout=2000)
-            has_review = self._is_visible(page, self._REVIEW_BTN, timeout=2000)
-            has_next   = self._is_visible(page, self._NEXT_BTN, timeout=2000)
+            modal = page.locator(self._MODAL).first
+            has_submit = self._is_visible_in(modal, self._SUBMIT_BTN, timeout=2000)
+            has_review = self._is_visible_in(modal, self._REVIEW_BTN, timeout=2000)
+            has_next   = self._is_visible_in(modal, self._NEXT_BTN, timeout=2000)
 
             if has_submit:
-                logs.append("Reached Submit step ✓")
+                logs.append("Reached Submit step; final review is required.")
                 if dry_run:
                     logs.append("DRY RUN — not clicking Submit.")
                     return "DRY_RUN", page.url
+                if not human_confirmed:
+                    logs.append("Waiting for explicit human confirmation; Submit was not clicked.")
+                    return "WAITING_FOR_HUMAN_CONFIRMATION", page.url
                 page.locator(self._SUBMIT_BTN).first.click()
                 page.wait_for_timeout(4000)
                 logs.append("Application submitted via Easy Apply! ✓")
@@ -443,21 +466,39 @@ class LinkedInAdapter(BaseAdapter):
                 return "APPLIED", page.url
 
             elif has_review:
-                logs.append("Clicking Review...")
-                page.locator(self._REVIEW_BTN).first.click()
-                page.wait_for_timeout(2000)
+                logs.append("Review button found; validating before advancing.")
+                before_html = modal.inner_html()
+                modal.locator(self._REVIEW_BTN).first.click()
+                try:
+                    self._wait_for_modal_change(page, before_html, timeout=5000)
+                    logs.append("Review advanced the application UI.")
+                except Exception:
+                    errors = self._get_validation_errors(page)
+                    logs.append(
+                        "[LinkedIn][ERROR] Review did not advance the application UI"
+                        + (f": {errors[:300]}" if errors else ".")
+                    )
+                    return "REQUIRES_MANUAL", page.url
 
             elif has_next:
                 # Check if page actually changed (avoid infinite loop on validation errors)
-                current_html = page.locator(self._MODAL).first.inner_html() if self._is_visible(page, self._MODAL, timeout=1000) else ""
+                current_html = modal.inner_html() if modal.is_visible(timeout=1000) else ""
                 if current_html and current_html == prev_html:
                     logs.append("Page did not advance — possible required field blocking next.")
                     # Try to find and fill the missing required field
                     self._fill_required_fields(page, profile, ai_cover_letter, ai_client, logs)
                 prev_html = current_html
                 logs.append("Clicking Next...")
-                page.locator(self._NEXT_BTN).first.click()
-                page.wait_for_timeout(2000)
+                modal.locator(self._NEXT_BTN).first.click()
+                try:
+                    self._wait_for_modal_change(page, current_html, timeout=5000)
+                except Exception:
+                    errors = self._get_validation_errors(page)
+                    logs.append(
+                        "[LinkedIn][ERROR] Next did not advance the application UI"
+                        + (f": {errors[:300]}" if errors else ".")
+                    )
+                    return "REQUIRES_MANUAL", page.url
 
             else:
                 # No navigation buttons — check for validation errors
@@ -473,11 +514,11 @@ class LinkedInAdapter(BaseAdapter):
                         page.locator(self._NEXT_BTN).first.click()
                         page.wait_for_timeout(2000)
                     elif self._is_visible(page, self._SUBMIT_BTN, timeout=2000):
-                        if not dry_run:
+                        if not dry_run and human_confirmed:
                             page.locator(self._SUBMIT_BTN).first.click()
                             page.wait_for_timeout(4000)
                             return "APPLIED", page.url
-                        return "DRY_RUN", page.url
+                        return "DRY_RUN" if dry_run else "WAITING_FOR_HUMAN_CONFIRMATION", page.url
                     else:
                         logs.append("No way to advance — stopping.")
                         break
@@ -559,6 +600,8 @@ class LinkedInAdapter(BaseAdapter):
             for sel in modal.locator("select:visible").all():
                 try:
                     meta = self._elem_meta(page, sel)
+                    question = self._read_question_text(page, sel)
+                    field_prompt = f"{meta} {question}".strip()
                     options = sel.evaluate(
                         "el => Array.from(el.options).map(o => ({v: o.value, t: o.text.toLowerCase().trim()}))"
                     )
@@ -566,14 +609,25 @@ class LinkedInAdapter(BaseAdapter):
                         continue
 
                     # Skip already selected (non-default)
-                    cur = sel.evaluate("el => el.value")
-                    if cur and cur not in ("", "0", "select", "-- select --", "please select"):
+                    cur = (sel.evaluate("el => el.value") or "").strip().lower()
+                    if cur and cur not in (
+                        "", "0", "select", "select an option", "-- select --", "please select"
+                    ):
+                        logs.append(f"Skipped already-selected native field '{field_prompt[:60]}'.")
                         continue
 
-                    chosen = self._pick_option(meta, options, prefs, sa)
+                    chosen = self._pick_option(field_prompt, options, prefs, sa)
+
+                    if chosen is None:
+                        explicit = self._explicit_screening_answer(field_prompt, sa)
+                        if explicit:
+                            for opt in options:
+                                if opt["t"] == explicit.lower() or explicit.lower() in opt["t"]:
+                                    chosen = opt["v"]
+                                    break
 
                     if chosen is None and ai_client and meta:
-                        ai_val = self._ai_answer(ai_client, meta, profile, logs, options=[o["t"] for o in options])
+                        ai_val = self._ai_answer(ai_client, field_prompt, profile, logs, options=[o["t"] for o in options])
                         if ai_val:
                             for opt in options:
                                 if ai_val.lower() in opt["t"]:
@@ -582,7 +636,7 @@ class LinkedInAdapter(BaseAdapter):
 
                     if chosen is not None:
                         sel.select_option(value=chosen)
-                        logs.append(f"✓ Select '{meta[:40]}' → '{chosen}'")
+                        logs.append(f"✓ Select '{field_prompt[:60]}' → '{chosen}'")
                     elif options:
                         # Pick first non-empty option as safe default
                         for opt in options:
@@ -593,6 +647,8 @@ class LinkedInAdapter(BaseAdapter):
 
                 except Exception as e:
                     logs.append(f"Select error: {e}")
+
+            self._fill_custom_comboboxes(modal, profile, logs)
 
             # ── Radio buttons ──────────────────────────────────────────────────
             radio_groups: dict = {}
@@ -612,6 +668,12 @@ class LinkedInAdapter(BaseAdapter):
                     question = self._read_question_text(page, group[0])
                     full_meta = (meta + " " + question).lower()
 
+                    if any(marker in full_meta for marker in (
+                        "resume", "cv", "download resume", "upload resume", "document card"
+                    )):
+                        logs.append(f"Skipped non-screening radio group '{name[:40]}'.")
+                        continue
+
                     want = self._pick_radio(full_meta, sa)
 
                     if want is None and ai_client and full_meta.strip():
@@ -629,12 +691,12 @@ class LinkedInAdapter(BaseAdapter):
                             val = (radio.get_attribute("value") or "").lower()
                             lbl = self._elem_meta(page, radio).lower()
                             if want in val or want in lbl or val in want:
-                                radio.check()
+                                radio.check(timeout=3000)
                                 logs.append(f"✓ Radio '{name[:40]}' → '{want}'")
                                 break
                     else:
                         # Default: check the first option
-                        group[0].check()
+                        group[0].check(timeout=3000)
                         logs.append(f"✓ Radio '{name[:40]}' → first option (default)")
 
                 except Exception as e:
@@ -820,6 +882,78 @@ class LinkedInAdapter(BaseAdapter):
             logs.append(f"AI answer error: {e}")
             return None
 
+    def _fill_custom_comboboxes(self, modal, profile: CandidateProfile, logs: List[str]) -> None:
+        """Fill custom controls only when an explicit profile answer exists."""
+        controls = modal.locator(
+            "[role='combobox']:visible, button[aria-haspopup='listbox']:visible, "
+            "div[role='combobox']:visible, [role='button']:has-text('Select an option'):visible, "
+            "button:has-text('Select an option'):visible"
+        ).all()
+        if not controls:
+            controls = [
+                candidate for candidate in modal.get_by_text("Select an option", exact=True).all()
+                if candidate.evaluate("el => el.tagName.toLowerCase()") != "option"
+            ]
+        logs.append(f"Detected {len(controls)} custom LinkedIn dropdown control(s).")
+
+        for control in controls:
+            try:
+                meta = self._elem_meta(modal.page, control)
+                question = self._read_question_text(modal.page, control)
+                surrounding_text = control.evaluate(
+                    """el => {
+                        let node = el;
+                        for (let i = 0; i < 5 && node; i++, node = node.parentElement) {
+                            const text = (node.innerText || '').trim();
+                            if (text.length > 20 && text.length < 500) return text;
+                        }
+                        return '';
+                    }"""
+                )
+                prompt = f"{meta} {question} {surrounding_text}".strip().lower()
+                answer = self._explicit_screening_answer(prompt, profile.screening_answers)
+                if not answer:
+                    logs.append(
+                        f"Custom LinkedIn control requires review: {question or meta[:80]}"
+                    )
+                    continue
+
+                control.click(timeout=3000)
+                matching = None
+                for option in modal.page.locator(
+                    "[role='option']:visible, li:visible, div[role='menuitem']:visible"
+                ).all():
+                    text = option.inner_text().strip()
+                    if text.lower() == answer.lower() or answer.lower() in text.lower():
+                        matching = option
+                        break
+                if matching is None:
+                    text_option = modal.page.get_by_text(answer, exact=True).last
+                    if text_option.is_visible(timeout=1000):
+                        matching = text_option
+                if matching is None:
+                    logs.append(f"No matching option for custom control: {question or meta[:80]}")
+                    continue
+                matching.click(timeout=3000)
+                logs.append(f"Selected custom control '{question or meta[:50]}' -> '{answer}'.")
+            except Exception as exc:
+                logs.append(f"Custom combobox error: {exc}")
+
+    @staticmethod
+    def _explicit_screening_answer(prompt: str, answers: dict) -> Optional[str]:
+        for question, answer in (answers or {}).items():
+            normalized_question = question.lower().replace("_", " ") if question else ""
+            aliases = {
+                "genai experience": ("genai", "rag", "ai agents", "hands-on experience building"),
+                "authorized to work": ("authorized", "legally", "right to work"),
+                "require sponsorship": ("sponsorship", "visa", "sponsor"),
+                "notice period": ("notice", "available", "start date"),
+                "willing to relocate": ("relocate", "relocation", "willing to move"),
+            }.get(normalized_question, (normalized_question,))
+            if any(alias and alias in prompt for alias in aliases) and answer not in (None, ""):
+                return str(answer)
+        return None
+
     # ── Helpers ────────────────────────────────────────────────────────────────
 
     def _inline_login(self, page: Page, profile: CandidateProfile, logs: List[str]) -> bool:
@@ -923,11 +1057,81 @@ class LinkedInAdapter(BaseAdapter):
         return any(x in url for x in ["/authwall", "/login", "/signup", "/uas/login", "checkpoint"])
 
     @staticmethod
+    def _verification_required(page: Page) -> bool:
+        try:
+            url = page.url.lower()
+            if any(marker in url for marker in (
+                "/checkpoint", "/challenge", "/verification", "/two-step", "/otp"
+            )):
+                return True
+            text = page.locator("body").inner_text(timeout=1500).lower()
+            return any(marker in text for marker in (
+                "captcha", "verify you are human", "suspicious login",
+                "unusual activity", "security verification", "confirm your identity",
+            ))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _write_diagnostics(page: Page, job: JobRecord, outcome: AdapterOutcome, screenshot_path: str) -> None:
+        try:
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            diagnostics_dir = Path(screenshot_path).parent.parent / "diagnostics" / f"job_{job.id}"
+            diagnostics_dir.mkdir(parents=True, exist_ok=True)
+            data = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "job_id": job.id,
+                "title": job.title,
+                "company": job.company,
+                "url": page.url,
+                "page_title": page.title(),
+                "status": outcome.status,
+                "error_reason": outcome.error_reason,
+                "logs": outcome.logs,
+                "buttons": page.locator("button:visible").all_inner_texts()[:40],
+                "forms": page.locator(
+                    "input:visible, textarea:visible, select:visible, [role='combobox']:visible"
+                ).count(),
+                "validation_errors": page.locator(
+                    ".artdeco-inline-feedback--error, .fb-dash-form-element__error-field, "
+                    "[data-test-form-element-error-message], .error-message, .invalid-feedback"
+                ).all_inner_texts(),
+                "screenshot": screenshot_path,
+            }
+            (diagnostics_dir / f"diagnostic_{timestamp}.json").write_text(
+                json.dumps(data, indent=2, ensure_ascii=True), encoding="utf-8"
+            )
+        except Exception:
+            pass
+
+    @staticmethod
     def _is_visible(page: Page, selector: str, timeout: int = 3000) -> bool:
         try:
             return page.locator(selector).first.is_visible(timeout=timeout)
         except Exception:
             return False
+
+    @staticmethod
+    def _is_visible_in(container, selector: str, timeout: int = 3000) -> bool:
+        try:
+            return container.locator(selector).first.is_visible(timeout=timeout)
+        except Exception:
+            return False
+
+    def _wait_for_modal_change(self, page: Page, before_html: str, timeout: int = 5000) -> None:
+        """Wait for the already-detected modal to change after navigation."""
+        deadline = time.monotonic() + timeout / 1000
+        while time.monotonic() < deadline:
+            try:
+                modal = page.locator(self._MODAL).first
+                if modal.is_visible(timeout=500):
+                    current_html = modal.inner_html(timeout=500)
+                    if current_html != before_html:
+                        return
+            except Exception:
+                pass
+            page.wait_for_timeout(150)
+        raise TimeoutError("Easy Apply modal did not change after navigation click.")
 
     @classmethod
     def _apply_button_visible(cls, page: Page, easy: bool, timeout: int = 3000) -> bool:

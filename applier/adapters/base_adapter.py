@@ -14,7 +14,7 @@ from database.repository import JobRecord
 
 @dataclass
 class AdapterOutcome:
-    status: str                    # APPLIED | DRY_RUN | REQUIRES_MANUAL | FAILED | SKIPPED
+    status: str                    # APPLIED | DRY_RUN | WAITING_FOR_HUMAN_CONFIRMATION | REQUIRES_MANUAL | VERIFICATION_REQUIRED | FAILED | SKIPPED
     redirect_url: str = ""
     screenshot_path: Optional[str] = None
     error_reason: Optional[str] = None
@@ -46,13 +46,7 @@ class BaseAdapter(ABC):
 
     @staticmethod
     def _new_page(context: BrowserContext) -> Page:
-        page = context.new_page()
-        try:
-            from playwright_stealth import Stealth
-            Stealth().apply_stealth_sync(page)
-        except Exception:
-            pass
-        return page
+        return context.new_page()
 
     @staticmethod
     def _screenshot(page: Page, path: str) -> None:

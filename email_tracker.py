@@ -3,6 +3,7 @@
 import email
 import imaplib
 import re
+import time
 from datetime import datetime, timezone
 from email.header import decode_header
 from email.message import Message
@@ -19,7 +20,13 @@ def _decode(value: Optional[str]) -> str:
     parts = []
     for text, encoding in decode_header(value):
         if isinstance(text, bytes):
-            parts.append(text.decode(encoding or "utf-8", errors="replace"))
+            charset = (encoding or "utf-8").lower()
+            if charset in {"unknown-8bit", "x-unknown", "binary"}:
+                charset = "utf-8"
+            try:
+                parts.append(text.decode(charset, errors="replace"))
+            except (LookupError, UnicodeError):
+                parts.append(text.decode("latin-1", errors="replace"))
         else:
             parts.append(text)
     return "".join(parts)
@@ -72,16 +79,29 @@ def sync_linkedin_emails() -> tuple[int, str]:
     init_db(SETTINGS.database_path)
     conn = get_connection(SETTINGS.database_path)
     repo = JobRepository(conn)
-    try:
-        mailbox = imaplib.IMAP4_SSL(SETTINGS.imap_host, SETTINGS.imap_port)
-    except (OSError, imaplib.IMAP4.error) as exc:
+    password = "".join((SETTINGS.imap_password or "").split())
+    mailbox = None
+    connection_error = None
+    for attempt in range(1, 4):
+        try:
+            mailbox_class = imaplib.IMAP4_SSL if SETTINGS.imap_use_ssl else imaplib.IMAP4
+            mailbox = mailbox_class(SETTINGS.imap_host, SETTINGS.imap_port, timeout=20)
+            break
+        except (OSError, imaplib.IMAP4.error) as exc:
+            connection_error = exc
+            if attempt < 3:
+                time.sleep(attempt)
+    if mailbox is None:
         conn.close()
-        return 0, f"IMAP connection failed: {exc}"
+        return 0, f"IMAP connection failed after 3 attempts: {connection_error}"
     try:
         try:
-            mailbox.login(SETTINGS.imap_username, SETTINGS.imap_password)
+            mailbox.login(SETTINGS.imap_username, password)
         except (OSError, imaplib.IMAP4.error) as exc:
-            return 0, f"IMAP authentication failed: {exc}"
+            return 0, (
+                "IMAP authentication failed. Check the mailbox username and Gmail app password; "
+                "the password must be current and IMAP-enabled."
+            )
         mailbox.select("INBOX")
         rows = conn.execute(
             """

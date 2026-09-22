@@ -6,6 +6,7 @@ to the form-filling engine and the AI engine.
 """
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -90,9 +91,9 @@ class CandidateProfile:
             location=p.get("location", ""),
             linkedin_url=p.get("linkedin_url", ""),
             linkedin_email=p.get("linkedin_email") or p.get("email", ""),
-            linkedin_password=p.get("linkedin_password", ""),
+            linkedin_password=os.getenv("LINKEDIN_PASSWORD", ""),
             workday_email=p.get("workday_email") or p.get("email", ""),
-            workday_password=p.get("workday_password", ""),
+            workday_password=os.getenv("WORKDAY_PASSWORD", ""),
             github_url=p.get("github_url", ""),
             portfolio_url=p.get("portfolio_url", ""),
             resume_path=p.get("resume_path", "resume.pdf"),

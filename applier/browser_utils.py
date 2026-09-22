@@ -63,11 +63,7 @@ def launch_safe_context(
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/128.0.0.0 Safari/537.36"
     )
-    args = [
-        "--disable-blink-features=AutomationControlled",
-        "--no-sandbox",
-        "--disable-dev-shm-usage",
-    ]
+    args = ["--no-sandbox", "--disable-dev-shm-usage"]
     if extra_args:
         args.extend(extra_args)
 
